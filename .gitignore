@@ -1,0 +1,8 @@
+HolyLogs.sln
+.vs/**
+build.bat
+HolyLogs.vcxproj.filters
+HolyLogs.vcxproj
+obj/**
+bin/**
+HolyLogs.vcxproj.user
