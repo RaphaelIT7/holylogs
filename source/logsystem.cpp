@@ -17,6 +17,14 @@ struct LogKey
 };
 #endif
 
+// Strings for filesystem stuff
+static constexpr const char* pLogDataDir = "logdata/data/";
+static constexpr int pLogDataDirLength = 13;
+static constexpr const char* pLogIndexesDir = "logdata/indexes/";
+static constexpr int pLogIndexesDirLength = 16;
+static constexpr const char* pLogExtension = ".dat";
+static constexpr int pLogExtensionLength = 4;
+
 static constexpr int ENTRIES_TRIGGER_DELETION = 1 << 16; // This can safely be increased without needing a version change since the nEntriesData is at the end of the LogIndex
 static constexpr int ENTRIES_DELETION_CYCLE = 1 << 8; // How many entries are deleted if we ever hit the limit.
 // FileSystem::MAX_PATH is set to 256 since most OS filesystems only allow file names/paths up to that length.
@@ -62,9 +70,10 @@ public:
 	FileHandle_t OpenIndexFile()
 	{
 		char nIndexFileName[FileSystem::MAX_PATH];
-		std::memcpy(nIndexFileName, "logdata/indexes/", 16);
-		int nWritten = Util::WriteUniqueFilenameIntoBuffer(pIndex.nEntryFileName, nIndexFileName+16, sizeof(nIndexFileName) - 16);
-		std::memcpy(nIndexFileName + 16 + nWritten, ".dat", 4);
+		std::memcpy(nIndexFileName, pLogIndexesDir, pLogIndexesDirLength);
+		int nWritten = Util::WriteUniqueFilenameIntoBuffer(pIndex.nEntryFileName, nIndexFileName + pLogIndexesDirLength, sizeof(nIndexFileName) - pLogIndexesDirLength);
+		std::memcpy(nIndexFileName + pLogIndexesDirLength + nWritten, pLogExtension, pLogExtensionLength);
+		nIndexFileName[pLogIndexesDirLength + nWritten + pLogExtensionLength] = '\0';
 
 		return FileSystem::OpenWriteFile(nIndexFileName);
 	}
@@ -74,9 +83,10 @@ public:
 		if (!pEntryFile.is_open())
 		{
 			char nEntryFileName[FileSystem::MAX_PATH];
-			std::memcpy(nEntryFileName, "logdata/data/", 13);
-			int nWritten = Util::WriteUniqueFilenameIntoBuffer(pIndex.nEntryFileName, nEntryFileName+13, sizeof(nEntryFileName) - 13);
-			std::memcpy(nEntryFileName + 13 + nWritten, ".dat", 4);
+			std::memcpy(nEntryFileName, pLogDataDir, pLogDataDirLength);
+			int nWritten = Util::WriteUniqueFilenameIntoBuffer(pIndex.nEntryFileName, nEntryFileName + pLogDataDirLength, sizeof(nEntryFileName) - pLogDataDirLength);
+			std::memcpy(nEntryFileName + pLogDataDirLength + nWritten, pLogExtension, pLogExtensionLength);
+			nEntryFileName[pLogDataDirLength + nWritten + pLogExtensionLength] = '\0';
 
 			pEntryFile = FileSystem::OpenWriteFile(nEntryFileName);
 		}
@@ -171,9 +181,11 @@ private:
 
 		// Yeah, duplicate code... anyways, it helps memory usage.
 		char nEntryFileName[FileSystem::MAX_PATH];
-		std::memcpy(nEntryFileName, "logdata/data/", 13);
-		int nWritten = Util::WriteUniqueFilenameIntoBuffer(pIndex.nEntryFileName, nEntryFileName+13, sizeof(nEntryFileName) - 13);
-		std::memcpy(nEntryFileName + 13 + nWritten, ".dat", 4);
+		std::memcpy(nEntryFileName, pLogDataDir, pLogDataDirLength);
+		int nWritten = Util::WriteUniqueFilenameIntoBuffer(pIndex.nEntryFileName, nEntryFileName + pLogDataDirLength, sizeof(nEntryFileName) - pLogDataDirLength);
+		std::memcpy(nEntryFileName + pLogDataDirLength + nWritten, pLogExtension, pLogExtensionLength);
+		nEntryFileName[pLogDataDirLength + nWritten + pLogExtensionLength] = '\0';
+
 		FileSystem::TurnaceFile(nEntryFileName, nNewOffset);
 	}
 
