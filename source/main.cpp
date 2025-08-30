@@ -1,11 +1,11 @@
 #include "httpserver.h"
 #include "commandline.h"
-#include "filesystem.h"
+#include "logsystem.h"
 
 int main(int c, char* v[])
 {
 	CommandLine::Init(c, v);
-	FileSystem::Init();
+	LogSystem::Init();
 
 	if (!HttpServer::Start())
 	{

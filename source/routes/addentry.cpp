@@ -21,7 +21,7 @@ public:
 			auto& entryKeys = Util::ReadFakeJson(entryNameJson);
 			LogSystem::AddEntry(entryKeys, req.body);
 #else
-			std::string entryIndex = req.get_param_value("entryIndex");
+			std::string entryIndex = req.get_header_value("entryIndex");
 			if (entryIndex.empty())
 			{
 				res.status = 400;

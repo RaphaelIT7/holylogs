@@ -1,10 +1,21 @@
 #include "filesystem.h"
 #include <iostream>
 #include <filesystem>
+#include <io.h>
 
-FileHandle_t FileSystem::OpenForWriteFile(const std::string& pFileName)
+FileHandle_t FileSystem::OpenReadFile(const std::string& pFileName)
 {
-	return nullptr;
+	return std::fstream(pFileName, std::ios::in);
+}
+
+FileHandle_t FileSystem::OpenWriteFile(const std::string& pFileName)
+{
+	return std::fstream(pFileName, std::ios::out);
+}
+
+FileHandle_t FileSystem::OpenFile(const std::string& pFileName)
+{
+	return std::fstream(pFileName, std::ios::in | std::ios::out);
 }
 
 void FileSystem::CloseFile(FileHandle_t pFileHandle)
@@ -20,4 +31,13 @@ bool FileSystem::FileExists(const std::string& pFolderName)
 void FileSystem::CreateDirectory(const char* pFolderName)
 {
 	std::filesystem::create_directories(pFolderName);
+}
+
+void FileSystem::TurnaceFile(const std::string& pFileName, unsigned int fileSize)
+{
+#if defined(_WIN32)
+    _chsize_s(_fileno(fopen(pFileName.c_str(), "rb+")), fileSize);
+#else
+    truncate(pFileName, fileSize);
+#endif
 }

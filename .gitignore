@@ -1,8 +1,7 @@
 HolyLogs.sln
 .vs/**
 build.bat
-HolyLogs.vcxproj.filters
-HolyLogs.vcxproj
+HolyLogs.vc**
 obj/**
 bin/**
-HolyLogs.vcxproj.user
+logdata**
