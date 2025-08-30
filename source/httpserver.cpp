@@ -1,8 +1,13 @@
 #include "httpserver.h"
 #include "commandline.h"
 
+static std::vector<HttpRoute*>& GetRoutes()
+{
+	static std::vector<HttpRoute*> routes;
+	return routes;
+}
+
 static httplib::Server g_pHttpServer;
-static std::vector<HttpRoute*> g_pRoutes = {};
 bool HttpServer::Start()
 {
 	if (!CommandLine::HasParam("-address"))
@@ -20,7 +25,7 @@ bool HttpServer::Start()
 	std::string strAdress = CommandLine::GetParamString("-address");
 	int nPort = CommandLine::GetParamInt("-port");
 
-	for (auto& pRoute : g_pRoutes)
+	for (auto& pRoute : GetRoutes())
 	{
 		printf("Setting up route %s\n", pRoute->GetName());
 		pRoute->Setup(g_pHttpServer);
@@ -37,16 +42,16 @@ bool HttpServer::Start()
 
 void HttpServer::RegisterRoute(HttpRoute* pRoute)
 {
-	g_pRoutes.push_back(pRoute);
+	GetRoutes().push_back(pRoute);
 }
 
 void HttpServer::UnregisterRoute(HttpRoute* pRoute)
 {
-	for (auto it = g_pRoutes.begin(); it != g_pRoutes.end(); )
+	for (auto it = GetRoutes().begin(); it != GetRoutes().end(); )
 	{
 		if ((*it) == pRoute)
 		{
-			g_pRoutes.erase(it);
+			GetRoutes().erase(it);
 			return;
 		}
 
