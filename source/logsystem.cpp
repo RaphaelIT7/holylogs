@@ -3,6 +3,7 @@
 #include "shared_mutex"
 #include "util.h"
 #include "algorithm"
+#include "bitset"
 
 // We never expect the nFileOffset to exceed 4gb since at best all logs together should be less than 1gb.
 struct LogEntry
@@ -15,7 +16,7 @@ struct LogEntry
 
 
 // Simplified it by every Index having a single unique name instead of this.
-static constexpr int MAX_KEY_SIZE = 64;
+static constexpr int MAX_KEY_SIZE = 48;
 #ifdef LOGSYSTEM_MULTIPLE_KEYS
 static constexpr int MAX_KEY_COUNT = 16;
 struct LogKey
@@ -25,8 +26,8 @@ struct LogKey
 };
 #endif
 
-static constexpr int MAX_ENTRIES = 4096; // This can safely be increased without needing a version change since the nEntriesData is at the end of the LogIndex
-static constexpr int ENTRIES_DELETION_CYCLE = MAX_ENTRIES / 8; // How many entries are deleted if we ever hit the limit.
+static constexpr int MAX_ENTRIES = 512; // This can safely be increased without needing a version change since the nEntriesData is at the end of the LogIndex
+static constexpr int ENTRIES_DELETION_CYCLE = 128; // How many entries are deleted if we ever hit the limit.
 // FileSystem::MAX_PATH is set to 256 since most OS filesystems only allow file names/paths up to that length.
 struct LogIndex // This should NEVER have stuff like std::string, we write this entire sturcture straight to disk!
 {
@@ -71,6 +72,7 @@ struct LogIndex // This should NEVER have stuff like std::string, we write this 
 		return FileSystem::OpenWriteFile(nEntryFileName);
 	}
 
+	// SLOW, returns the calculated total file size for the log data / combines all log entry sizes together.
 	int GetTotalEntrySize()
 	{
 		int nSize = 0;
@@ -91,11 +93,31 @@ struct LogIndex // This should NEVER have stuff like std::string, we write this 
 		pFile.write((char*)this, sizeof(LogIndex));
 		pFile.close();
 	}
+
+	void SetIndexName(const std::string& pKeyName)
+	{
+		if (nIndexName[0] != '\0') // Name is already set.
+			return;
+
+		std::strncpy(nIndexName, pKeyName.c_str(), MAX_KEY_SIZE - 1);
+		nIndexName[MAX_KEY_SIZE - 1] = '\0';
+	}
 };
 
 struct Log // This stuct will be in memory, and only the LogIndex is written to disk.
 {
 public:
+	~Log()
+	{
+		pIndex.SaveIndex();
+
+		if (pLogFile.is_open())
+			pLogFile.close();
+
+		if (pEntryFile.is_open())
+			pEntryFile.close();
+	}
+
 	FileHandle_t& OpenIndexFile()
 	{
 		if (!pLogFile.is_open())
@@ -116,15 +138,104 @@ public:
 		return pEntryFile;
 	}
 
-	LogIndex pIndex;
-	std::shared_mutex pMutex; // Used to lock this LogIndex while we write/read from it as we cannot guarantee safetry in our setup in any different way.
+	void AddEntry(const std::string& pEntryData)
+	{
+		// We need to do a full lock since currently we do not support multiple threads writing to the same log entry.
+		std::lock_guard<std::mutex> lock(pMutex);
+
+		if (pIndex.nEntries >= MAX_ENTRIES) // Well... Now we got a problem.
+		{
+			DoEntryDeletionCycle();
+		}
+
+		int nLogIndex = pIndex.nEntries; // Will always be 1 above the last since Array's start at 0... (I messed this up already once...)
+		if (nLogIndex >= MAX_ENTRIES)
+			nLogIndex = MAX_ENTRIES-1; // Should never happen but it threw me a warning anyways!
+
+		LogEntry& pEntry = pIndex.nEntriesData[nLogIndex];
+	
+		FileHandle_t& pFile = OpenDataFile();
+		if (!pFile.is_open())
+			return;
+
+		pFile.seekp(nTotalSize); // We do this before we set the nSize since else it would also include the file were actively writing!
+
+		pEntry.nSize = std::min(USHRT_MAX, (int)pEntryData.length()); // Limit to USHRT_MAX
+		++pIndex.nEntries;
+		nTotalSize += pEntry.nSize;
+
+		pFile.write(pEntryData.c_str(), pEntry.nSize);
+
+		pFile.flush();
+	}
 
 private:
+	// This is VERY expensive!!!
+	// Why is it expensive?
+	// We restructure the entire LogIndex shifitng all entires and we write the entire data file again to remove old entires and update all offsets.
+	void DoEntryDeletionCycle()
+	{
+		if (pIndex.nEntries <= ENTRIES_DELETION_CYCLE)
+			return; // Not enouth entries!
+
+		int nCurrentOffset = 0; // Total size of data that we will remove from the head of the file.
+		for (int i=0; i<ENTRIES_DELETION_CYCLE; ++i)
+		{
+			nCurrentOffset += pIndex.nEntriesData[i].nSize; // Skipping these.
+		}
+
+		FileHandle_t& pFile = OpenDataFile();
+		if (!pFile.is_open())
+			return; // Failed to open? Ok...
+
+		std::unique_ptr<char[]> pBuffer(new char[USHRT_MAX]); // 64kb buffer to use while were swapping things around.
+		int i = ENTRIES_DELETION_CYCLE; // Skip these first as the lower their index the older they are.
+		int nNewOffset = 0; // Offset for the moved data
+		for (; i<pIndex.nEntries; ++i)
+		{
+			int nNewIndex = i - ENTRIES_DELETION_CYCLE;
+			LogEntry& pEntry = pIndex.nEntriesData[i];
+
+			pFile.seekg(nCurrentOffset);
+			pFile.read(pBuffer.get(), pEntry.nSize); // We don't need to check bounds since each entry has a size limit of USHRT_MAX
+
+			pFile.seekp(nNewOffset);
+			pFile.write(pBuffer.get(), pEntry.nSize);
+
+			pIndex.nEntriesData[nNewIndex] = pIndex.nEntriesData[i]; // Gonna move it here already :3
+			// pIndex.nEntriesData[nNewIndex].nFileOffset = nNewOffset;
+
+			// Now update our offsets
+			nCurrentOffset += pEntry.nSize;
+			nNewOffset += pEntry.nSize;
+		}
+
+		pIndex.nEntries -= ENTRIES_DELETION_CYCLE;
+
+		nTotalSize = nNewOffset;
+
+		// We need to close since else FileSystem::TurnaceFile will corrupt the handle and cause a crash
+		// UPDATE: I had a crash INSIDE TurnaceFile and not because of this being flush... flush should be fine, right?
+		pFile.flush();
+
+		FileSystem::TurnaceFile(pIndex.nEntryFileName, nNewOffset);
+	}
+
+public:
+	LogIndex pIndex;
+	std::mutex pMutex; // Used to lock this LogIndex while we write/read from it as we cannot guarantee safetry in our setup in any different way.
+
+private:
+	// We don't close the files instantly to heavily improve performance.
 	FileHandle_t pLogFile;
 	FileHandle_t pEntryFile;
+
+	// Same as pIndex.GetTotalSize() though we keep direct track of it for faster access.
+	unsigned int nTotalSize = 0;
 };
 
-static std::vector<std::unique_ptr<Log>> g_pLogIndexes = {};
+// We use a unordered_map for hashing since its way faster for many indexes
+static std::unordered_map<std::string, std::unique_ptr<Log>> g_pLogIndexes = {};
 static std::shared_mutex g_LogIndexesMutex;
 void LogSystem::Init()
 {
@@ -177,22 +288,21 @@ static Log* FindOrCreateLogIndex(const std::string& entryKey)
 {
 	{
 		std::shared_lock<std::shared_mutex> readLock(g_LogIndexesMutex);
-		for (std::unique_ptr<Log>& pLog : g_pLogIndexes)
-		{
-			LogIndex& pIndex = pLog.get()->pIndex;
-			if (std::strncmp(pIndex.nIndexName, entryKey.c_str(), sizeof(pIndex.nIndexName)) == 0)
-				return pLog.get();
-		}
+		auto it = g_pLogIndexes.find(entryKey);
+		if (it != g_pLogIndexes.end())
+			return it->second.get();
 	}
 
 	std::unique_lock<std::shared_mutex> writeLock(g_LogIndexesMutex);
-	g_pLogIndexes.emplace_back(std::make_unique<Log>());
-	memset(&g_pLogIndexes.back().get()->pIndex, 0, sizeof(LogIndex)); // Init everything as 0
-	return g_pLogIndexes.back().get();
+	Log* pLog = new Log();
+	pLog->pIndex.SetIndexName(entryKey);
+	g_pLogIndexes[entryKey] = std::unique_ptr<Log>(pLog);
+	return pLog;
 }
 #endif
 
 #ifdef LOGSYSTEM_MULTIPLE_KEYS
+// Every entryKeys is limited by Util::ReadFakeJson to 64 characters per key or value & in total they can be 512 characters.
 static void FillLogIndexKeys(LogIndex& pIndex, const std::unordered_map<std::string, std::string>& entryKeys)
 {
 	// If it already has keys, we can skip since for the LogIndex to be picked all keys had to match
@@ -210,111 +320,14 @@ static void FillLogIndexKeys(LogIndex& pIndex, const std::unordered_map<std::str
 			return pLog; // We found our index.
 	}
 }
-#else
-static void FillLogIndexKeys(LogIndex& pIndex, const std::string& entryKey)
-{
-	if (pIndex.nIndexName[0] != '\0') // Name is already set.
-		return;
-
-	std::strncpy(pIndex.nIndexName, entryKey.c_str(), MAX_KEY_SIZE - 1);
-	pIndex.nIndexName[MAX_KEY_SIZE - 1] = '\0';
-}
 #endif
 
-// This is VERY expensive!!!
-// Why is it expensive? We restructure the entire LogIndex shifitng all entires and we write the entire data file again to remove old entires and update all offsets.
-static void DoEntryDeletionCycle(LogIndex& pIndex)
-{
-	if (pIndex.nEntries <= ENTRIES_DELETION_CYCLE)
-		return; // Not enouth entries!
-
-	int nCurrentOffset = 0; // Total size of data that we will remove from the head of the file.
-	for (int i=0; i<ENTRIES_DELETION_CYCLE; ++i)
-	{
-		nCurrentOffset += pIndex.nEntriesData[i].nSize; // Skipping these.
-	}
-
-	FileHandle_t pFile = pIndex.OpenDataFile();
-	if (!pFile.is_open())
-		return; // Failed to open? Ok...
-
-	std::unique_ptr<char[]> pBuffer(new char[USHRT_MAX]); // 64kb buffer to use while were swapping things around.
-	int i = ENTRIES_DELETION_CYCLE; // Skip these first as the lower their index the older they are.
-	int nNewOffset = 0; // Offset for the moved data
-	for (; i<pIndex.nEntries; ++i)
-	{
-		int nNewIndex = i - ENTRIES_DELETION_CYCLE;
-		LogEntry& pEntry = pIndex.nEntriesData[i];
-
-		pFile.seekg(nCurrentOffset);
-		pFile.read(pBuffer.get(), pEntry.nSize); // We don't need to check bounds since each entry has a size limit of USHRT_MAX
-
-		pFile.seekp(nNewOffset);
-		pFile.write(pBuffer.get(), pEntry.nSize);
-
-		pIndex.nEntriesData[nNewIndex] = pIndex.nEntriesData[i]; // Gonna move it here already :3
-		// pIndex.nEntriesData[nNewIndex].nFileOffset = nNewOffset;
-
-		// Now update our offsets
-		nCurrentOffset += pEntry.nSize;
-		nNewOffset += pEntry.nSize;
-	}
-
-	pIndex.nEntries -= ENTRIES_DELETION_CYCLE;
-
-	pFile.close();
-
-	FileSystem::TurnaceFile(pIndex.nEntryFileName, nNewOffset);
-}
-
-static void AddNewEntryIntoLog(Log* pLog, const std::string& entryData)
-{
-	LogIndex& pIndex = pLog->pIndex;
-	if (pIndex.nEntries >= MAX_ENTRIES) // Well... Now we got a problem.
-	{
-		DoEntryDeletionCycle(pIndex);
-	}
-
-	int nLogIndex = pIndex.nEntries; // Will always be 1 above the last since Array's start at 0... (I messed this up already once...)
-	if (nLogIndex >= MAX_ENTRIES)
-		nLogIndex = MAX_ENTRIES-1; // Should never happen but it threw me a warning anyways!
-
-	LogEntry& pEntry = pIndex.nEntriesData[nLogIndex];
-	
-	FileHandle_t& pFile = pLog->OpenDataFile();
-	if (!pFile.is_open())
-		return;
-
-	pFile.seekp(pIndex.GetTotalEntrySize()); // We do this before we set the nSize since else it would also include the file were actively writing!
-
-	pEntry.nSize = std::min(USHRT_MAX, (int)entryData.length()); // Limit to USHRT_MAX
-	++pIndex.nEntries;
-
-	pFile.write(entryData.c_str(), pEntry.nSize);
-
-	pFile.flush();
-}
-
-#ifdef LOGSYSTEM_MULTIPLE_KEYS
-// Every entryKeys is limited by Util::ReadFakeJson to 64 characters per key or value & in total they can be 512 characters.
-// The entryData is limited to around 32kb by the httpserver payload limit inside of HttpServer::Start
-bool LogSystem::AddEntry(const std::unordered_map<std::string, std::string>& entryKeys, const std::string& entryData)
-{
-	Log& pIndex = FindOrCreateLogIndex(entryKeys);
-
-	std::unique_lock<std::shared_mutex> writeLock(pIndex.pMutex);
-}
-#else
 // The entryData is limited to around 32kb by the httpserver payload limit inside of HttpServer::Start
 bool LogSystem::AddEntry(const std::string& entryKey, const std::string& entryData)
 {
 	Log* pLog = FindOrCreateLogIndex(entryKey);
 
-	std::unique_lock<std::shared_mutex> writeLock(pLog->pMutex);
-	FillLogIndexKeys(pLog->pIndex, entryKey);
-	AddNewEntryIntoLog(pLog, entryData);
-	pLog->pIndex.SaveIndex();
+	pLog->AddEntry(entryData);
 
 	return true;
 }
-#endif

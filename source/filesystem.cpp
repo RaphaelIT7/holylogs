@@ -36,8 +36,16 @@ void FileSystem::CreateDirectory(const char* pFolderName)
 void FileSystem::TurnaceFile(const std::string& pFileName, unsigned int fileSize)
 {
 #if defined(_WIN32)
-    _chsize_s(_fileno(fopen(pFileName.c_str(), "rb+")), fileSize);
+	FILE* pFileHandle = fopen(pFileName.c_str(), "rb+");
+	if (!pFileHandle)
+		return;
+
+	int pFileDescriptor = _fileno(pFileHandle);
+	if (pFileDescriptor != -1)
+		_chsize_s(pFileDescriptor, fileSize);
+
+	fclose(pFileHandle);
 #else
-    truncate(pFileName, fileSize);
+    truncate(pFileName.c_str(), fileSize);
 #endif
 }

@@ -5,3 +5,4 @@ HolyLogs.vc**
 obj/**
 bin/**
 logdata**
+enc_temp_folder/**

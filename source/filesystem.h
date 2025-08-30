@@ -5,7 +5,7 @@
 typedef std::fstream FileHandle_t;
 namespace FileSystem
 {
-	constexpr int MAX_PATH = 260;
+	constexpr int MAX_PATH = 48; // 260; // NOTE: We don't use any long or absolute file paths so 48 should be more than enouth.
 
 	extern FileHandle_t OpenReadFile(const std::string& pFileName);
 	extern FileHandle_t OpenWriteFile(const std::string& pFileName);
