@@ -30,7 +30,7 @@ public:
 
 			LogSystem::AddEntry(entryIndex, req.body);
 #endif
-
+			res.set_header("Content-Type", "text/plain");
 			res.status = 200;
 		});
 	}

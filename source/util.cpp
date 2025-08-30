@@ -10,7 +10,7 @@
 #include <codecvt>
 #include <string>
 #ifndef _WIN32
-#include <pthread>
+#include <pthread.h>
 #else
 #include <windows.h>
 #include <processthreadsapi.h>

@@ -2,7 +2,7 @@
 #include "commandline.h"
 
 static httplib::Server g_pHttpServer;
-static std::unordered_set<HttpRoute*> g_pRoutes = {};
+static std::vector<HttpRoute*> g_pRoutes = {};
 bool HttpServer::Start()
 {
 	if (!CommandLine::HasParam("-address"))
@@ -37,18 +37,19 @@ bool HttpServer::Start()
 
 void HttpServer::RegisterRoute(HttpRoute* pRoute)
 {
-	auto it = g_pRoutes.find(pRoute);
-	if (it != g_pRoutes.end())
-		return;
-
-	g_pRoutes.insert(pRoute);
+	g_pRoutes.push_back(pRoute);
 }
 
 void HttpServer::UnregisterRoute(HttpRoute* pRoute)
 {
-	auto it = g_pRoutes.find(pRoute);
-	if (it == g_pRoutes.end())
-		return;
+	for (auto it = g_pRoutes.begin(); it != g_pRoutes.end(); )
+	{
+		if ((*it) == pRoute)
+		{
+			g_pRoutes.erase(it);
+			return;
+		}
 
-	g_pRoutes.erase(it);
+		it++;
+	}
 }

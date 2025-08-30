@@ -10,4 +10,5 @@ namespace LogSystem
 #else
 	extern bool AddEntry(const std::string& entryKey, const std::string& entryData);
 #endif
+	extern void GetEntries(const std::string& entryKey, std::string& pOutput);
 }

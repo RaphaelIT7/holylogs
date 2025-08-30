@@ -1,0 +1,35 @@
+name: Build HolyLogs
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/compile.yml'
+      - 'source/**'
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    container: debian:bullseye
+    steps:
+      - name: Install Dependencies
+        run: |
+          apt update
+          apt install -y build-essential
+
+      - uses: actions/checkout@v4
+        name: Checkout
+
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Generate libs
+        run: |
+          chmod +x premake5
+          ./premake5 gmake
+          make
+
+      - uses: actions/upload-artifact@v4
+        name: Upload luajit executable (64x)
+        with:
+          name: HolyLogs
+          path: bin/Debug/HolyLogs
+          retention-days: 1

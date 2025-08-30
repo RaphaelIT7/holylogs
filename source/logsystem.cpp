@@ -3,11 +3,14 @@
 #include "shared_mutex"
 #include "util.h"
 #include "algorithm"
-#include <chrono>
+#include "chrono"
+#include "cstring"
+#include "climits"
+#include "mutex"
 
 typedef unsigned short EntrySize;
 
-static constexpr double MAX_INDEX_LOADED_TIME = 30.0; // Time in seconds after which a index is unloaded. (based off the last time they were accessed)
+static constexpr double MAX_INDEX_LOADED_TIME = 10.0; // Time in seconds after which a index is unloaded. (based off the last time they were accessed)
 static constexpr long long INDEX_LOADED_CHECK_INTERVALS = 1000; // How often we check for indexes to unload (in ms)
 
 // Simplified it by every Index having a single unique name instead of this.
@@ -29,8 +32,8 @@ static constexpr int pLogIndexesDirLength = 16;
 static constexpr const char* pLogExtension = ".dat";
 static constexpr int pLogExtensionLength = 4;
 
-static constexpr int ENTRIES_TRIGGER_DELETION = 1 << 16; // This can safely be increased without needing a version change since the nEntriesData is at the end of the LogIndex
-static constexpr int ENTRIES_DELETION_CYCLE = 1 << 12; // How many entries are deleted if we ever hit the limit.
+static constexpr int ENTRIES_TRIGGER_DELETION = 1 << 14; // This can safely be increased without needing a version change since the nEntriesData is at the end of the LogIndex
+static constexpr int ENTRIES_DELETION_CYCLE = 1 << 11; // How many entries are deleted if we ever hit the limit.
 // FileSystem::MAX_PATH is set to 256 since most OS filesystems only allow file names/paths up to that length.
 struct LogIndex // This should NEVER have stuff like std::string, we write this entire sturcture straight to disk!
 {
@@ -62,6 +65,15 @@ struct LogIndex // This should NEVER have stuff like std::string, we write this 
 struct Log // This stuct will be in memory, and only the LogIndex is written to disk.
 {
 public:
+	enum FileMode
+	{
+		NONE = 0,
+		READ = 1,
+		WRITE = 2,
+		APPEND = 3,
+		READWRITE = 4,
+	};
+
 	Log()
 	{
 		MarkTouched();
@@ -70,7 +82,7 @@ public:
 	~Log()
 	{
 
-		FileHandle_t& pFile = OpenIndexFile();
+		FileHandle_t pFile = OpenIndexFile();
 		if (pFile.is_open())
 		{
 			pFile.write((char*)this, sizeof(LogIndex));
@@ -92,8 +104,11 @@ public:
 		return FileSystem::OpenWriteFile(nIndexFileName);
 	}
 
-	FileHandle_t& OpenDataFile()
+	FileHandle_t& OpenDataFile(FileMode pFileMode)
 	{
+		if (pEntryFile.is_open() && pFileMode != nEntryFileMode)
+			pEntryFile.close();
+
 		if (!pEntryFile.is_open())
 		{
 			char nEntryFileName[FileSystem::MAX_PATH];
@@ -102,7 +117,16 @@ public:
 			std::memcpy(nEntryFileName + pLogDataDirLength + nWritten, pLogExtension, pLogExtensionLength);
 			nEntryFileName[pLogDataDirLength + nWritten + pLogExtensionLength] = '\0';
 
-			pEntryFile = FileSystem::OpenWriteFile(nEntryFileName);
+			nEntryFileMode = pFileMode;
+			if (nEntryFileMode == FileMode::APPEND) {
+				pEntryFile = FileSystem::OpenAppendFile(nEntryFileName);
+			} else if (nEntryFileMode == FileMode::READ) {
+				pEntryFile = FileSystem::OpenReadFile(nEntryFileName);
+			} else if (nEntryFileMode == FileMode::WRITE) {
+				pEntryFile = FileSystem::OpenWriteFile(nEntryFileName);
+			} else {
+				pEntryFile = FileSystem::OpenFile(nEntryFileName);
+			}
 		}
 
 		return pEntryFile;
@@ -124,7 +148,7 @@ public:
 		if (nLogIndex >= ENTRIES_TRIGGER_DELETION)
 			nLogIndex = ENTRIES_TRIGGER_DELETION-1; // Should never happen but it threw me a warning anyways!
 	
-		FileHandle_t& pFile = OpenDataFile();
+		FileHandle_t& pFile = OpenDataFile(FileMode::APPEND);
 		if (!pFile.is_open())
 			return;
 
@@ -166,7 +190,7 @@ private:
 		if (pIndex.nEntries <= ENTRIES_DELETION_CYCLE)
 			return; // Not enouth entries!
 
-		FileHandle_t& pFile = OpenDataFile();
+		FileHandle_t& pFile = OpenDataFile(FileMode::READWRITE);
 		if (!pFile.is_open())
 			return; // Failed to open? Ok...
 
@@ -180,7 +204,7 @@ private:
 			nCurrentOffset += sizeof(nSize);
 		}
 
-		std::unique_ptr<char[]> pBuffer(new char[USHRT_MAX]); // 64kb buffer to use while were swapping things around.
+		char pBuffer[USHRT_MAX]; // 64kb buffer to use while were swapping things around.
 		int i = ENTRIES_DELETION_CYCLE; // Skip these first as the lower their index the older they are.
 		int nNewOffset = 0; // Offset for the moved data
 		for (; i<pIndex.nEntries; ++i)
@@ -191,11 +215,11 @@ private:
 
 			EntrySize nSize;
 			pFile.read((char*)&nSize, sizeof(nSize));
-			pFile.read(pBuffer.get(), nSize); // We don't need to check bounds since each entry has a size limit of USHRT_MAX
+			pFile.read(pBuffer, nSize); // We don't need to check bounds since each entry has a size limit of USHRT_MAX
 
 			pFile.seekp(nNewOffset);
 			pFile.write((char*)&nSize, sizeof(nSize));
-			pFile.write(pBuffer.get(), nSize);
+			pFile.write(pBuffer, nSize);
 
 			// Now update our offsets
 			nSize += sizeof(nSize); // increment by this since we also write it into the file.
@@ -235,6 +259,7 @@ public:
 private:
 	// We don't close the files instantly to heavily improve performance.
 	FileHandle_t pEntryFile;
+	FileMode nEntryFileMode = FileMode::NONE; // -1 = Read, 0 = None, 1 = Write
 
 	// Last time we touched this Log entry.
 	std::chrono::system_clock::time_point nLastTouched;
@@ -450,7 +475,7 @@ private:
 };
 
 static LogState g_pLogState;
-static Log* FindOrCreateLogIndex(const std::string& entryKey)
+static Log* FindOrCreateLogIndex(const std::string& entryKey, bool bCreate = true)
 {
 	std::string pKey = entryKey.substr(0, MAX_KEY_SIZE - 1); // Limit it to MAX_KEY_SIZE
 	std::size_t pKeyHash = std::hash<std::string>{}(pKey);
@@ -470,6 +495,9 @@ static Log* FindOrCreateLogIndex(const std::string& entryKey)
 		}
 	}
 
+	if (!bCreate)
+		return nullptr;
+
 	std::unique_lock<std::shared_mutex> writeLock(g_LogIndexesMutex);
 
 	Log* pLog = new Log();
@@ -488,4 +516,50 @@ bool LogSystem::AddEntry(const std::string& entryKey, const std::string& entryDa
 	pLog->AddEntry(entryData);
 
 	return true;
+}
+
+void LogSystem::GetEntries(const std::string& entryKey, std::string& pOutput)
+{
+	Log* pLog = FindOrCreateLogIndex(entryKey, false);
+	if (!pLog)
+	{
+		pOutput = "";
+		return;
+	}
+
+	std::unique_lock<std::mutex> writeLock(pLog->pMutex); // Lock it just in case any writes try to come in.
+	FileHandle_t& pFile = pLog->OpenDataFile(Log::FileMode::READ);
+	if (!pFile.is_open())
+	{
+		pOutput = "";
+		return;
+	}
+
+	pFile.seekg(0);
+
+	// Just to be safe we add 8 more bytes per nEntries
+	pOutput.resize(2 + pLog->pIndex.nTotalSize + (8 * pLog->pIndex.nEntries));
+
+	std::size_t nPos = 0;
+	for (size_t i=0; i<pLog->pIndex.nEntries; ++i)
+	{
+		EntrySize nSize;
+		pFile.read((char*)&nSize, sizeof(nSize));
+
+		char pFileBuffer[USHRT_MAX];
+		pFile.read(pFileBuffer, nSize);
+
+		std::string strNumber = std::to_string(nSize);
+		memcpy(&pOutput[nPos], strNumber.c_str(), strNumber.size());
+		nPos += strNumber.size();
+		pOutput[nPos++] = '\0';
+
+		memcpy(&pOutput[nPos], pFileBuffer, nSize);
+		nPos += nSize;
+		pOutput[nPos++] = '\0';
+	}
+
+	pOutput.resize(nPos);
+
+	pFile.close();
 }

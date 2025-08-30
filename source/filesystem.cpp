@@ -1,7 +1,11 @@
 #include "filesystem.h"
 #include <iostream>
 #include <filesystem>
+#if _WIN32
 #include <io.h>
+#else
+#include <unistd.h>
+#endif
 
 // ToDo: Go lower and use stuff like CreateFile from windows to hopefully make these faster.
 FileHandle_t FileSystem::OpenReadFile(const char* pFileName)

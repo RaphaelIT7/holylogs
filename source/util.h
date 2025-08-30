@@ -2,14 +2,22 @@
 #include "string"
 #include "thread"
 
+#if _WIN32
 __pragma(pack(push, 2))
+#else
+#pragma pack(push, 2)
+#endif
 struct UniqueFilenameId
 {
 	uint64_t timestamp = 0;
 	uint32_t threadHash = 0;
 	uint16_t randomSuffix = 0;
 };
+#if _WIN32
 __pragma(pack(pop))
+#else
+#pragma pack(pop)
+#endif
 
 namespace Util
 {

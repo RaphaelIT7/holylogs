@@ -5,7 +5,7 @@ project("HolyLogs")
 	kind("ConsoleApp")
 	language("C++")
 	targetdir("bin/%{cfg.buildcfg}")
-	cppdialect("C++26")
+	cppdialect("C++17")
 
 	defines("CPPHTTPLIB_NO_EXCEPTIONS")
 
@@ -25,9 +25,12 @@ project("HolyLogs")
 	})
 
 	filter("configurations:Debug")
-	  defines({"DEBUG"})
-	  symbols("On")
+		defines({"DEBUG"})
+		symbols("On")
 
-   filter("configurations:Release")
-	  defines({"NDEBUG"})
-	  optimize("On")
+	filter("configurations:Release")
+		defines({"NDEBUG"})
+		optimize("On")
+
+	filter({"system:linux"})
+		links({"pthread"})
