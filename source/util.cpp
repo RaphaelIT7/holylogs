@@ -6,6 +6,16 @@
 #include <sstream>
 #include <iomanip>
 
+#include <locale>
+#include <codecvt>
+#include <string>
+#ifndef _WIN32
+#include <pthread>
+#else
+#include <windows.h>
+#include <processthreadsapi.h>
+#endif
+
 std::unordered_map<std::string, std::string> Util::ReadFakeJson(const std::string& jsonStr)
 {
 	// Limits since the logging server might be exposed to the public.
@@ -141,4 +151,15 @@ int Util::WriteUniqueFilenameIntoBuffer(UniqueFilenameId& nFileID, char* pBuffer
 		nFileID.threadHash,
 		nFileID.randomSuffix
 	);
+}
+
+void Util::SetThreadName(std::thread& pThread, std::string strThreadName)
+{
+#ifdef _WIN32
+	auto handle = (HANDLE)pThread.native_handle();
+	std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
+	SetThreadDescription(handle, converter.from_bytes(strThreadName).c_str());
+#else
+	pthread_setname_np(pThread.native_handle(), strThreadName.c_str());
+#endif
 }

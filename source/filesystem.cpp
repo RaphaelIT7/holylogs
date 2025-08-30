@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <io.h>
 
+// ToDo: Go lower and use stuff like CreateFile from windows to hopefully make these faster.
 FileHandle_t FileSystem::OpenReadFile(const char* pFileName)
 {
 	return std::fstream(pFileName, std::ios::in | std::ios::binary);

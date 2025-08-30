@@ -28,15 +28,7 @@ int main(int c, char* v[])
 		LogSystem::AddEntry(strIndex, "sexyassbody");
 	}
 
-	std::vector<std::thread> threads;
-	for (int i=0; i<8; ++i)
-	{
-		threads.emplace_back(testfunc, i);
-	}
-
-	while (true) {}
-
-	//if (!HttpServer::Start())
+	if (!HttpServer::Start())
 	{
 		printf("Failed to start HttpServer!\n");
 		return -1;

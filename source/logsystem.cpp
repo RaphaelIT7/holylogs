@@ -3,8 +3,12 @@
 #include "shared_mutex"
 #include "util.h"
 #include "algorithm"
+#include <chrono>
 
 typedef unsigned short EntrySize;
+
+static constexpr double MAX_INDEX_LOADED_TIME = 30.0; // Time in seconds after which a index is unloaded. (based off the last time they were accessed)
+static constexpr long long INDEX_LOADED_CHECK_INTERVALS = 1000; // How often we check for indexes to unload (in ms)
 
 // Simplified it by every Index having a single unique name instead of this.
 static constexpr int MAX_KEY_SIZE = 48;
@@ -53,6 +57,11 @@ struct LogIndex // This should NEVER have stuff like std::string, we write this 
 struct Log // This stuct will be in memory, and only the LogIndex is written to disk.
 {
 public:
+	Log()
+	{
+		MarkTouched();
+	}
+
 	~Log()
 	{
 
@@ -99,6 +108,8 @@ public:
 		// We need to do a full lock since currently we do not support multiple threads writing to the same log entry.
 		std::lock_guard<std::mutex> lock(pMutex);
 
+		MarkTouched();
+
 		if (pIndex.nEntries >= ENTRIES_TRIGGER_DELETION) // Well... Now we got a problem.
 		{
 			DoEntryDeletionCycle();
@@ -123,6 +134,11 @@ public:
 		pFile.write(pEntryData.c_str(), nSize);
 
 		pFile.flush();
+	}
+
+	bool ShouldUnload(std::chrono::system_clock::time_point pTimePoint)
+	{
+		return std::chrono::duration<double>(pTimePoint - nLastTouched).count() > MAX_INDEX_LOADED_TIME;
 	}
 
 private:
@@ -189,6 +205,12 @@ private:
 		FileSystem::TurnaceFile(nEntryFileName, nNewOffset);
 	}
 
+	// We got touched >:3
+	void MarkTouched()
+	{
+		nLastTouched = std::chrono::system_clock::now();
+	}
+
 public:
 	LogIndex pIndex;
 	std::mutex pMutex; // Used to lock this LogIndex while we write/read from it as we cannot guarantee safetry in our setup in any different way.
@@ -199,15 +221,55 @@ private:
 
 	// Same as pIndex.GetTotalSize() though we keep direct track of it for faster access.
 	unsigned int nTotalSize = 0;
+
+	std::chrono::system_clock::time_point nLastTouched;
 };
 
 // We use a unordered_map for hashing since its way faster for many indexes
 static std::unordered_map<std::string, std::unique_ptr<Log>> g_pLogIndexes = {};
 static std::shared_mutex g_LogIndexesMutex;
+static void UnloadAnyNonTouchedIndexes()
+{
+	while (true)
+	{
+		std::this_thread::sleep_for(std::chrono::milliseconds(INDEX_LOADED_CHECK_INTERVALS));
+
+		std::unordered_map<std::string, Log*> pLogsToUnload;
+		{
+			std::shared_lock<std::shared_mutex> readLock(g_LogIndexesMutex);
+			auto pCurrentTime = std::chrono::system_clock::now();
+			for (auto& [strLogName, pLog] : g_pLogIndexes)
+			{
+				if (!pLog.get()->ShouldUnload(pCurrentTime))
+					continue;
+
+				pLogsToUnload[strLogName] = pLog.get();
+			}
+		}
+
+		if (pLogsToUnload.empty())
+			continue;
+
+		std::unique_lock<std::shared_mutex> writeLock(g_LogIndexesMutex);
+		for (auto& [strLogName, pLog] : pLogsToUnload)
+		{
+			auto it = g_pLogIndexes.find(strLogName);
+			if (it == g_pLogIndexes.end())
+				continue;
+			
+			g_pLogIndexes.erase(it);
+		}
+		g_pLogIndexes.rehash(g_pLogIndexes.size());
+	}
+}
+
+static std::thread g_pLoggingIndexesThread(UnloadAnyNonTouchedIndexes);
 void LogSystem::Init()
 {
 	FileSystem::CreateDirectory("logdata/data");
 	FileSystem::CreateDirectory("logdata/indexes");
+
+	Util::SetThreadName(g_pLoggingIndexesThread, "UnloadAnyNonTouchedIndexes");
 }
 
 #ifdef LOGSYSTEM_MULTIPLE_KEYS

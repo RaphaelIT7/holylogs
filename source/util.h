@@ -1,5 +1,6 @@
 #include "unordered_map"
 #include "string"
+#include "thread"
 
 __pragma(pack(push, 2))
 struct UniqueFilenameId
@@ -22,4 +23,5 @@ namespace Util
 	extern int GenerateUniqueFilename(char* pBuffer, int nBufferSize);
 	extern void GenerateUniqueFilename(UniqueFilenameId& pFilename);
 	extern int WriteUniqueFilenameIntoBuffer(UniqueFilenameId& nFileID, char* pBuffer, int nBufferSize);
+	extern void SetThreadName(std::thread& pThread, std::string strThreadName);
 }
