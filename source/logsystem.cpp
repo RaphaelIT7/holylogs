@@ -30,7 +30,7 @@ static constexpr const char* pLogExtension = ".dat";
 static constexpr int pLogExtensionLength = 4;
 
 static constexpr int ENTRIES_TRIGGER_DELETION = 1 << 16; // This can safely be increased without needing a version change since the nEntriesData is at the end of the LogIndex
-static constexpr int ENTRIES_DELETION_CYCLE = 1 << 8; // How many entries are deleted if we ever hit the limit.
+static constexpr int ENTRIES_DELETION_CYCLE = 1 << 12; // How many entries are deleted if we ever hit the limit.
 // FileSystem::MAX_PATH is set to 256 since most OS filesystems only allow file names/paths up to that length.
 struct LogIndex // This should NEVER have stuff like std::string, we write this entire sturcture straight to disk!
 {
@@ -234,7 +234,7 @@ static void UnloadAnyNonTouchedIndexes()
 	{
 		std::this_thread::sleep_for(std::chrono::milliseconds(INDEX_LOADED_CHECK_INTERVALS));
 
-		std::unordered_map<std::string, Log*> pLogsToUnload;
+		bool bHasIndexesToDelete = false;
 		{
 			std::shared_lock<std::shared_mutex> readLock(g_LogIndexesMutex);
 			auto pCurrentTime = std::chrono::system_clock::now();
@@ -243,23 +243,39 @@ static void UnloadAnyNonTouchedIndexes()
 				if (!pLog.get()->ShouldUnload(pCurrentTime))
 					continue;
 
-				pLogsToUnload[strLogName] = pLog.get();
+				bHasIndexesToDelete = true;
+				break;
 			}
 		}
 
-		if (pLogsToUnload.empty())
+		if (!bHasIndexesToDelete)
 			continue;
 
-		std::unique_lock<std::shared_mutex> writeLock(g_LogIndexesMutex);
-		for (auto& [strLogName, pLog] : pLogsToUnload)
+
+		std::vector<Log*> pLogsToDelete;
 		{
-			auto it = g_pLogIndexes.find(strLogName);
-			if (it == g_pLogIndexes.end())
-				continue;
-			
-			g_pLogIndexes.erase(it);
+			std::unique_lock<std::shared_mutex> writeLock(g_LogIndexesMutex);
+			auto pCurrentTime = std::chrono::system_clock::now();
+			for (auto it = g_pLogIndexes.begin(); it != g_pLogIndexes.end(); )
+			{
+				if (!it->second.get()->ShouldUnload(pCurrentTime))
+				{
+					it++;
+					continue;
+				}
+
+				// Deleting the logs in here would block everything!
+				// So we move it outside of our lock to unblock g_LogIndexesMutex
+				pLogsToDelete.push_back(it->second.get());
+				it->second.release();
+
+				it = g_pLogIndexes.erase(it);
+			}
+			g_pLogIndexes.rehash(g_pLogIndexes.size());
 		}
-		g_pLogIndexes.rehash(g_pLogIndexes.size());
+
+		for (Log* pLog : pLogsToDelete)
+			delete pLog;
 	}
 }
 
@@ -322,10 +338,11 @@ static Log* FindOrCreateLogIndex(const std::string& entryKey)
 			return it->second.get();
 	}
 
+	std::string pKey = entryKey.substr(0, MAX_KEY_SIZE - 1); // Limit it to MAX_KEY_SIZE
 	std::unique_lock<std::shared_mutex> writeLock(g_LogIndexesMutex);
 	Log* pLog = new Log();
-	pLog->pIndex.SetIndexName(entryKey);
-	g_pLogIndexes[entryKey] = std::unique_ptr<Log>(pLog);
+	pLog->pIndex.SetIndexName(pKey);
+	g_pLogIndexes[pKey] = std::unique_ptr<Log>(pLog);
 	return pLog;
 }
 #endif
