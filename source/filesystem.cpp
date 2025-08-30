@@ -5,17 +5,17 @@
 
 FileHandle_t FileSystem::OpenReadFile(const std::string& pFileName)
 {
-	return std::fstream(pFileName, std::ios::in);
+	return std::fstream(pFileName, std::ios::in | std::ios::binary);
 }
 
 FileHandle_t FileSystem::OpenWriteFile(const std::string& pFileName)
 {
-	return std::fstream(pFileName, std::ios::out);
+	return std::fstream(pFileName, std::ios::out | std::ios::binary);
 }
 
 FileHandle_t FileSystem::OpenFile(const std::string& pFileName)
 {
-	return std::fstream(pFileName, std::ios::in | std::ios::out);
+	return std::fstream(pFileName, std::ios::in | std::ios::out | std::ios::binary);
 }
 
 void FileSystem::CloseFile(FileHandle_t pFileHandle)

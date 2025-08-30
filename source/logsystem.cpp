@@ -81,13 +81,47 @@ struct LogIndex // This should NEVER have stuff like std::string, we write this 
 
 		return nSize;
 	}
+
+	void SaveIndex()
+	{
+		FileHandle_t pFile = OpenIndexFile();
+		if (!pFile.is_open())
+			return;
+
+		pFile.write((char*)this, sizeof(LogIndex));
+		pFile.close();
+	}
 };
 
 struct Log // This stuct will be in memory, and only the LogIndex is written to disk.
 {
 public:
+	FileHandle_t& OpenIndexFile()
+	{
+		if (!pLogFile.is_open())
+		{
+			pLogFile = pIndex.OpenIndexFile();
+		}
+
+		return pLogFile;
+	}
+
+	FileHandle_t& OpenDataFile()
+	{
+		if (!pEntryFile.is_open())
+		{
+			pEntryFile = pIndex.OpenDataFile();
+		}
+
+		return pEntryFile;
+	}
+
 	LogIndex pIndex;
 	std::shared_mutex pMutex; // Used to lock this LogIndex while we write/read from it as we cannot guarantee safetry in our setup in any different way.
+
+private:
+	FileHandle_t pLogFile;
+	FileHandle_t pEntryFile;
 };
 
 static std::vector<std::unique_ptr<Log>> g_pLogIndexes = {};
@@ -233,8 +267,9 @@ static void DoEntryDeletionCycle(LogIndex& pIndex)
 	FileSystem::TurnaceFile(pIndex.nEntryFileName, nNewOffset);
 }
 
-static void AddNewEntryIntoLog(LogIndex& pIndex, const std::string& entryData)
+static void AddNewEntryIntoLog(Log* pLog, const std::string& entryData)
 {
+	LogIndex& pIndex = pLog->pIndex;
 	if (pIndex.nEntries >= MAX_ENTRIES) // Well... Now we got a problem.
 	{
 		DoEntryDeletionCycle(pIndex);
@@ -246,7 +281,7 @@ static void AddNewEntryIntoLog(LogIndex& pIndex, const std::string& entryData)
 
 	LogEntry& pEntry = pIndex.nEntriesData[nLogIndex];
 	
-	FileHandle_t pFile = pIndex.OpenDataFile();
+	FileHandle_t& pFile = pLog->OpenDataFile();
 	if (!pFile.is_open())
 		return;
 
@@ -257,7 +292,7 @@ static void AddNewEntryIntoLog(LogIndex& pIndex, const std::string& entryData)
 
 	pFile.write(entryData.c_str(), pEntry.nSize);
 
-	pFile.close();
+	pFile.flush();
 }
 
 #ifdef LOGSYSTEM_MULTIPLE_KEYS
@@ -277,7 +312,8 @@ bool LogSystem::AddEntry(const std::string& entryKey, const std::string& entryDa
 
 	std::unique_lock<std::shared_mutex> writeLock(pLog->pMutex);
 	FillLogIndexKeys(pLog->pIndex, entryKey);
-	AddNewEntryIntoLog(pLog->pIndex, entryData);
+	AddNewEntryIntoLog(pLog, entryData);
+	pLog->pIndex.SaveIndex();
 
 	return true;
 }
