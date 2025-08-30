@@ -5,7 +5,7 @@ project("HolyLogs")
 	kind("ConsoleApp")
 	language("C++")
 	targetdir("bin/%{cfg.buildcfg}")
-	cppdialect("C++17")
+	cppdialect("C++26")
 
 	defines("CPPHTTPLIB_NO_EXCEPTIONS")
 

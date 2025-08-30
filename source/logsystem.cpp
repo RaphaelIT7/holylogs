@@ -23,53 +23,14 @@ static constexpr int ENTRIES_DELETION_CYCLE = 1 << 8; // How many entries are de
 struct LogIndex // This should NEVER have stuff like std::string, we write this entire sturcture straight to disk!
 {
 	unsigned int version = 1; // In case we change any of the structs in the future.
-	char nIndexFileName[FileSystem::MAX_PATH] = {0}; // FileName of the index file containing this LogIndex data.
-	char nEntryFileName[FileSystem::MAX_PATH] = {0}; // FileName of the data file containing all our entries.
+	UniqueFilenameId nIndexFileName; // FileName of the index file containing this LogIndex data.
+	UniqueFilenameId nEntryFileName; // FileName of the data file containing all our entries.
 	char nIndexName[MAX_KEY_SIZE] = {0}; // Unique name of this index that is given to use to find it.
 #ifdef LOGSYSTEM_MULTIPLE_KEYS
 	unsigned int nKeys = 0; // The total number of keys that refer to this log entry.
 	LogKey nKeysData[MAX_KEY_COUNT] = {0}; // Directly after nKeys the keys follow, each one is null terminated.
 #endif
 	unsigned int nEntries = 0;
-
-	FileHandle_t OpenIndexFile()
-	{
-		if (nIndexFileName[0] == '\0')
-		{
-			std::string pFileName = "logdata/indexes/";
-			pFileName.append(Util::GenerateUniqueFilename());
-			pFileName.append(".dat");
-
-			std::strncpy(nIndexFileName, pFileName.c_str(), sizeof(nIndexFileName) - 1);
-			nIndexFileName[sizeof(nIndexFileName) - 1] = '\0';
-		}
-
-		return FileSystem::OpenWriteFile(nIndexFileName);
-	}
-
-	FileHandle_t OpenDataFile()
-	{
-		if (nEntryFileName[0] == '\0')
-		{
-			std::memcpy(nEntryFileName, "logdata/data/", 13);
-			int nWritten = Util::GenerateUniqueFilename(nEntryFileName + 13, sizeof(nEntryFileName) - 13);
-			std::memcpy(nEntryFileName + 13 + nWritten, ".dat", 4);
-
-			nEntryFileName[sizeof(nEntryFileName) - 1] = '\0';
-		}
-
-		return FileSystem::OpenWriteFile(nEntryFileName);
-	}
-
-	void SaveIndex()
-	{
-		FileHandle_t pFile = OpenIndexFile();
-		if (!pFile.is_open())
-			return;
-
-		pFile.write((char*)this, sizeof(LogIndex));
-		pFile.close();
-	}
 
 	void SetIndexName(const std::string& pKeyName)
 	{
@@ -86,30 +47,38 @@ struct Log // This stuct will be in memory, and only the LogIndex is written to 
 public:
 	~Log()
 	{
-		pIndex.SaveIndex();
 
-		if (pLogFile.is_open())
-			pLogFile.close();
+		FileHandle_t& pFile = OpenIndexFile();
+		if (pFile.is_open())
+		{
+			pFile.write((char*)this, sizeof(LogIndex));
+			pFile.close();
+		}
 
 		if (pEntryFile.is_open())
 			pEntryFile.close();
 	}
 
-	FileHandle_t& OpenIndexFile()
+	FileHandle_t OpenIndexFile()
 	{
-		if (!pLogFile.is_open())
-		{
-			pLogFile = pIndex.OpenIndexFile();
-		}
+		char nIndexFileName[FileSystem::MAX_PATH];
+		std::memcpy(nIndexFileName, "logdata/indexes/", 16);
+		int nWritten = Util::WriteUniqueFilenameIntoBuffer(pIndex.nEntryFileName, nIndexFileName+16, sizeof(nIndexFileName) - 16);
+		std::memcpy(nIndexFileName + 16 + nWritten, ".dat", 4);
 
-		return pLogFile;
+		return FileSystem::OpenWriteFile(nIndexFileName);
 	}
 
 	FileHandle_t& OpenDataFile()
 	{
 		if (!pEntryFile.is_open())
 		{
-			pEntryFile = pIndex.OpenDataFile();
+			char nEntryFileName[FileSystem::MAX_PATH];
+			std::memcpy(nEntryFileName, "logdata/data/", 13);
+			int nWritten = Util::WriteUniqueFilenameIntoBuffer(pIndex.nEntryFileName, nEntryFileName+13, sizeof(nEntryFileName) - 13);
+			std::memcpy(nEntryFileName + 13 + nWritten, ".dat", 4);
+
+			pEntryFile = FileSystem::OpenWriteFile(nEntryFileName);
 		}
 
 		return pEntryFile;
@@ -200,7 +169,12 @@ private:
 		// UPDATE: I had a crash INSIDE TurnaceFile and not because of this being flush... flush should be fine, right?
 		pFile.flush();
 
-		FileSystem::TurnaceFile(pIndex.nEntryFileName, nNewOffset);
+		// Yeah, duplicate code... anyways, it helps memory usage.
+		char nEntryFileName[FileSystem::MAX_PATH];
+		std::memcpy(nEntryFileName, "logdata/data/", 13);
+		int nWritten = Util::WriteUniqueFilenameIntoBuffer(pIndex.nEntryFileName, nEntryFileName+13, sizeof(nEntryFileName) - 13);
+		std::memcpy(nEntryFileName + 13 + nWritten, ".dat", 4);
+		FileSystem::TurnaceFile(nEntryFileName, nNewOffset);
 	}
 
 public:
@@ -209,7 +183,6 @@ public:
 
 private:
 	// We don't close the files instantly to heavily improve performance.
-	FileHandle_t pLogFile;
 	FileHandle_t pEntryFile;
 
 	// Same as pIndex.GetTotalSize() though we keep direct track of it for faster access.

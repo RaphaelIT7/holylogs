@@ -118,3 +118,27 @@ int Util::GenerateUniqueFilename(char* pBuffer, int nBufferSize)
 		random_suffix
 	);
 }
+
+void Util::GenerateUniqueFilename(UniqueFilenameId& id)
+{
+	auto now = std::chrono::system_clock::now();
+	auto duration = now.time_since_epoch();
+	id.timestamp = std::chrono::duration_cast<std::chrono::microseconds>(duration).count();
+
+	id.threadHash = static_cast<uint32_t>(
+		std::hash<std::thread::id>{}(std::this_thread::get_id())
+	);
+
+	static thread_local std::mt19937 gen(std::random_device{}());
+	std::uniform_int_distribution<uint16_t> dist(0, 9999);
+	id.randomSuffix = dist(gen);
+}
+
+int Util::WriteUniqueFilenameIntoBuffer(UniqueFilenameId& nFileID, char* pBuffer, int nBufferSize)
+{
+	return std::snprintf(pBuffer, nBufferSize, "%llx_%x_%04u",
+		static_cast<unsigned long long>(nFileID.timestamp),
+		nFileID.threadHash,
+		nFileID.randomSuffix
+	);
+}
