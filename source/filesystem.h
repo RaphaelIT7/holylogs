@@ -9,10 +9,12 @@ namespace FileSystem
 
 	extern FileHandle_t OpenReadFile(const char* pFileName);
 	extern FileHandle_t OpenWriteFile(const char* pFileName);
+	extern FileHandle_t OpenAppendFile(const char* pFileName);
 	extern FileHandle_t OpenFile(const char* pFileName);
 
 	extern FileHandle_t OpenReadFile(const std::string& pFileName);
 	extern FileHandle_t OpenWriteFile(const std::string& pFileName);
+	extern FileHandle_t OpenAppendFile(const std::string& pFileName);
 	extern FileHandle_t OpenFile(const std::string& pFileName);
 
 	extern bool FileExists(const char* pFileName);

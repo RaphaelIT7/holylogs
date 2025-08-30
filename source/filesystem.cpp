@@ -14,6 +14,11 @@ FileHandle_t FileSystem::OpenWriteFile(const char* pFileName)
 	return std::fstream(pFileName, std::ios::out | std::ios::binary);
 }
 
+FileHandle_t FileSystem::OpenAppendFile(const char* pFileName)
+{
+	return std::fstream(pFileName, std::ios::app | std::ios::binary);
+}
+
 FileHandle_t FileSystem::OpenFile(const char* pFileName)
 {
 	return std::fstream(pFileName, std::ios::in | std::ios::out | std::ios::binary);
@@ -27,6 +32,11 @@ FileHandle_t FileSystem::OpenReadFile(const std::string& pFileName)
 FileHandle_t FileSystem::OpenWriteFile(const std::string& pFileName)
 {
 	return std::fstream(pFileName, std::ios::out | std::ios::binary);
+}
+
+FileHandle_t FileSystem::OpenAppendFile(const std::string& pFileName)
+{
+	return std::fstream(pFileName, std::ios::app | std::ios::binary);
 }
 
 FileHandle_t FileSystem::OpenFile(const std::string& pFileName)

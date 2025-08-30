@@ -22,6 +22,6 @@ namespace Util
 	// Returns the number of bytes written
 	extern int GenerateUniqueFilename(char* pBuffer, int nBufferSize);
 	extern void GenerateUniqueFilename(UniqueFilenameId& pFilename);
-	extern int WriteUniqueFilenameIntoBuffer(UniqueFilenameId& nFileID, char* pBuffer, int nBufferSize);
+	extern int WriteUniqueFilenameIntoBuffer(const UniqueFilenameId& nFileID, char* pBuffer, int nBufferSize);
 	extern void SetThreadName(std::thread& pThread, std::string strThreadName);
 }

@@ -20,12 +20,13 @@ int main(int c, char* v[])
 	CommandLine::Init(c, v);
 	LogSystem::Init();
 
-	for (int k=0; k<50000; ++k)
+	for (int k=0; k<1; ++k)
 	{
-		std::string strIndex = "reallyunessesarylongtexttoseehowwelltheindexesworkwiththem-";
+		std::string strIndex = "reallyunes-";
 		strIndex.append(std::to_string(k));
 
-		LogSystem::AddEntry(strIndex, "reallyunessesaryongentrynamejusttoseehowwellitperformsnwithlongerpiecesofdatawhilealsotryingtoseehowwellthewholeunloadingstuffworksandsoon");
+		for (int i=0;i<10;++i)
+			LogSystem::AddEntry(strIndex, "reallyunessesaryongentrynamejusttoseehowwellitperformsnwithlongerpiecesofdatawhilealsotryingtoseehowwellthewholeunloadingstuffworksandsoon");
 	}
 
 	if (!HttpServer::Start())

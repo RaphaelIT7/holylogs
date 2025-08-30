@@ -34,15 +34,20 @@ static constexpr int ENTRIES_DELETION_CYCLE = 1 << 12; // How many entries are d
 // FileSystem::MAX_PATH is set to 256 since most OS filesystems only allow file names/paths up to that length.
 struct LogIndex // This should NEVER have stuff like std::string, we write this entire sturcture straight to disk!
 {
+	LogIndex()
+	{
+		Util::GenerateUniqueFilename(nFileName);
+	}
+
 	unsigned int version = 1; // In case we change any of the structs in the future.
-	UniqueFilenameId nIndexFileName; // FileName of the index file containing this LogIndex data.
-	UniqueFilenameId nEntryFileName; // FileName of the data file containing all our entries.
+	UniqueFilenameId nFileName; // FileName of the index file containing this LogIndex data.
 	char nIndexName[MAX_KEY_SIZE] = {0}; // Unique name of this index that is given to use to find it.
 #ifdef LOGSYSTEM_MULTIPLE_KEYS
 	unsigned int nKeys = 0; // The total number of keys that refer to this log entry.
 	LogKey nKeysData[MAX_KEY_COUNT] = {0}; // Directly after nKeys the keys follow, each one is null terminated.
 #endif
 	unsigned int nEntries = 0;
+	unsigned int nTotalSize = 0;
 
 	void SetIndexName(const std::string& pKeyName)
 	{
@@ -80,7 +85,7 @@ public:
 	{
 		char nIndexFileName[FileSystem::MAX_PATH];
 		std::memcpy(nIndexFileName, pLogIndexesDir, pLogIndexesDirLength);
-		int nWritten = Util::WriteUniqueFilenameIntoBuffer(pIndex.nEntryFileName, nIndexFileName + pLogIndexesDirLength, sizeof(nIndexFileName) - pLogIndexesDirLength);
+		int nWritten = Util::WriteUniqueFilenameIntoBuffer(pIndex.nFileName, nIndexFileName + pLogIndexesDirLength, sizeof(nIndexFileName) - pLogIndexesDirLength);
 		std::memcpy(nIndexFileName + pLogIndexesDirLength + nWritten, pLogExtension, pLogExtensionLength);
 		nIndexFileName[pLogIndexesDirLength + nWritten + pLogExtensionLength] = '\0';
 
@@ -93,7 +98,7 @@ public:
 		{
 			char nEntryFileName[FileSystem::MAX_PATH];
 			std::memcpy(nEntryFileName, pLogDataDir, pLogDataDirLength);
-			int nWritten = Util::WriteUniqueFilenameIntoBuffer(pIndex.nEntryFileName, nEntryFileName + pLogDataDirLength, sizeof(nEntryFileName) - pLogDataDirLength);
+			int nWritten = Util::WriteUniqueFilenameIntoBuffer(pIndex.nFileName, nEntryFileName + pLogDataDirLength, sizeof(nEntryFileName) - pLogDataDirLength);
 			std::memcpy(nEntryFileName + pLogDataDirLength + nWritten, pLogExtension, pLogExtensionLength);
 			nEntryFileName[pLogDataDirLength + nWritten + pLogExtensionLength] = '\0';
 
@@ -123,12 +128,12 @@ public:
 		if (!pFile.is_open())
 			return;
 
-		pFile.seekp(nTotalSize); // We do this before we set the nSize since else it would also include the file were actively writing!
+		pFile.seekp(pIndex.nTotalSize); // We do this before we set the nSize since else it would also include the file were actively writing!
 
 		EntrySize nSize = std::min(USHRT_MAX, (int)pEntryData.length()); // Limit to USHRT_MAX
 		++pIndex.nEntries;
-		nTotalSize += nSize;
-		nTotalSize += sizeof(nSize);
+		pIndex.nTotalSize += nSize;
+		pIndex.nTotalSize += sizeof(nSize);
 
 		pFile.write((char*)&nSize, sizeof(nSize));
 		pFile.write(pEntryData.c_str(), nSize);
@@ -139,6 +144,17 @@ public:
 	bool ShouldUnload(std::chrono::system_clock::time_point pTimePoint)
 	{
 		return std::chrono::duration<double>(pTimePoint - nLastTouched).count() > MAX_INDEX_LOADED_TIME;
+	}
+
+	void SetIndexName(const std::string& pKeyName)
+	{
+		pIndex.SetIndexName(pKeyName);
+		pIndexHash = std::hash<std::string>{}(pKeyName);
+	}
+
+	void SetIndexHash(const std::size_t pHash)
+	{
+		pIndexHash = pHash;
 	}
 
 private:
@@ -189,7 +205,7 @@ private:
 
 		pIndex.nEntries -= ENTRIES_DELETION_CYCLE;
 
-		nTotalSize = nNewOffset;
+		pIndex.nTotalSize = nNewOffset;
 
 		// We need to close since else FileSystem::TurnaceFile will corrupt the handle and cause a crash
 		// UPDATE: I had a crash INSIDE TurnaceFile and not because of this being flush... flush should be fine, right?
@@ -198,7 +214,7 @@ private:
 		// Yeah, duplicate code... anyways, it helps memory usage.
 		char nEntryFileName[FileSystem::MAX_PATH];
 		std::memcpy(nEntryFileName, pLogDataDir, pLogDataDirLength);
-		int nWritten = Util::WriteUniqueFilenameIntoBuffer(pIndex.nEntryFileName, nEntryFileName + pLogDataDirLength, sizeof(nEntryFileName) - pLogDataDirLength);
+		int nWritten = Util::WriteUniqueFilenameIntoBuffer(pIndex.nFileName, nEntryFileName + pLogDataDirLength, sizeof(nEntryFileName) - pLogDataDirLength);
 		std::memcpy(nEntryFileName + pLogDataDirLength + nWritten, pLogExtension, pLogExtensionLength);
 		nEntryFileName[pLogDataDirLength + nWritten + pLogExtensionLength] = '\0';
 
@@ -214,19 +230,17 @@ private:
 public:
 	LogIndex pIndex;
 	std::mutex pMutex; // Used to lock this LogIndex while we write/read from it as we cannot guarantee safetry in our setup in any different way.
+	std::size_t pIndexHash = 0;
 
 private:
 	// We don't close the files instantly to heavily improve performance.
 	FileHandle_t pEntryFile;
 
-	// Same as pIndex.GetTotalSize() though we keep direct track of it for faster access.
-	unsigned int nTotalSize = 0;
-
+	// Last time we touched this Log entry.
 	std::chrono::system_clock::time_point nLastTouched;
 };
 
-// We use a unordered_map for hashing since its way faster for many indexes
-static std::unordered_map<std::string, std::unique_ptr<Log>> g_pLogIndexes = {};
+static std::vector<std::unique_ptr<Log>> g_pLogIndexes = {};
 static std::shared_mutex g_LogIndexesMutex;
 static void UnloadAnyNonTouchedIndexes()
 {
@@ -238,7 +252,7 @@ static void UnloadAnyNonTouchedIndexes()
 		{
 			std::shared_lock<std::shared_mutex> readLock(g_LogIndexesMutex);
 			auto pCurrentTime = std::chrono::system_clock::now();
-			for (auto& [strLogName, pLog] : g_pLogIndexes)
+			for (auto& pLog : g_pLogIndexes)
 			{
 				if (!pLog.get()->ShouldUnload(pCurrentTime))
 					continue;
@@ -258,7 +272,7 @@ static void UnloadAnyNonTouchedIndexes()
 			auto pCurrentTime = std::chrono::system_clock::now();
 			for (auto it = g_pLogIndexes.begin(); it != g_pLogIndexes.end(); )
 			{
-				if (!it->second.get()->ShouldUnload(pCurrentTime))
+				if (!it->get()->ShouldUnload(pCurrentTime))
 				{
 					it++;
 					continue;
@@ -266,12 +280,11 @@ static void UnloadAnyNonTouchedIndexes()
 
 				// Deleting the logs in here would block everything!
 				// So we move it outside of our lock to unblock g_LogIndexesMutex
-				pLogsToDelete.push_back(it->second.get());
-				it->second.release();
+				pLogsToDelete.push_back(it->get());
+				it->release();
 
 				it = g_pLogIndexes.erase(it);
 			}
-			g_pLogIndexes.rehash(g_pLogIndexes.size());
 		}
 
 		for (Log* pLog : pLogsToDelete)
@@ -328,26 +341,7 @@ static Log* FindOrCreateLogIndex(const std::unordered_map<std::string, std::stri
 	std::unique_lock<std::shared_mutex> writeLock(g_LogIndexesMutex);
 	return g_pLogIndexes.emplace_back();
 }
-#else
-static Log* FindOrCreateLogIndex(const std::string& entryKey)
-{
-	{
-		std::shared_lock<std::shared_mutex> readLock(g_LogIndexesMutex);
-		auto it = g_pLogIndexes.find(entryKey);
-		if (it != g_pLogIndexes.end())
-			return it->second.get();
-	}
 
-	std::string pKey = entryKey.substr(0, MAX_KEY_SIZE - 1); // Limit it to MAX_KEY_SIZE
-	std::unique_lock<std::shared_mutex> writeLock(g_LogIndexesMutex);
-	Log* pLog = new Log();
-	pLog->pIndex.SetIndexName(pKey);
-	g_pLogIndexes[pKey] = std::unique_ptr<Log>(pLog);
-	return pLog;
-}
-#endif
-
-#ifdef LOGSYSTEM_MULTIPLE_KEYS
 // Every entryKeys is limited by Util::ReadFakeJson to 64 characters per key or value & in total they can be 512 characters.
 static void FillLogIndexKeys(LogIndex& pIndex, const std::unordered_map<std::string, std::string>& entryKeys)
 {
@@ -367,6 +361,124 @@ static void FillLogIndexKeys(LogIndex& pIndex, const std::unordered_map<std::str
 	}
 }
 #endif
+
+struct LogState
+{
+	Log* FindLog(const std::string entryKey)
+	{
+		UniqueFilenameId pIndexID;
+		std::size_t pKeyHash = std::hash<std::string>{}(entryKey);
+		if (!GetIndex(pKeyHash, pIndexID))
+			return nullptr;
+
+		char nIndexFileName[FileSystem::MAX_PATH];
+		std::memcpy(nIndexFileName, pLogIndexesDir, pLogIndexesDirLength);
+		int nWritten = Util::WriteUniqueFilenameIntoBuffer(pIndexID, nIndexFileName + pLogIndexesDirLength, sizeof(nIndexFileName) - pLogIndexesDirLength);
+		std::memcpy(nIndexFileName + pLogIndexesDirLength + nWritten, pLogExtension, pLogExtensionLength);
+		nIndexFileName[pLogIndexesDirLength + nWritten + pLogExtensionLength] = '\0';
+
+		FileHandle_t pFile = FileSystem::OpenReadFile(nIndexFileName);
+		if (!pFile.is_open())
+			return nullptr;
+
+		Log* pLog = new Log();
+		pFile.read((char*)&pLog->pIndex, sizeof(LogIndex));
+		pFile.close();
+		pLog->SetIndexHash(pKeyHash);
+
+		return pLog;
+	}
+
+	bool GetIndex(const std::size_t pKeyHash, UniqueFilenameId& pIndexID)
+	{
+		EnsureOpen();
+		if (!pReadStateFile.is_open())
+			return false;
+
+		pReadStateFile.seekg(0);
+		while (true)
+		{
+			std::size_t pHash;
+			pReadStateFile.read((char*)&pHash, sizeof(pHash));
+			if (pReadStateFile.gcount() != sizeof(pHash))
+				break;
+
+			if (pHash == pKeyHash)
+			{
+				pReadStateFile.read((char*)&pIndexID, sizeof(pIndexID));
+				if (pReadStateFile.gcount() != sizeof(pIndexID))
+					break;
+
+				return true;
+			}
+
+			pReadStateFile.seekg(sizeof(UniqueFilenameId), std::ios::cur);
+		}
+
+		return false;
+	}
+
+	void AddEntryToList(const std::string& pIndexName, const UniqueFilenameId& pIndexFileID)
+	{
+		if (pReadStateFile.is_open())
+			pReadStateFile.close();
+
+		FileHandle_t pHandle = FileSystem::OpenAppendFile("logdata/state.dat");
+		if (pHandle)
+		{
+			pHandle.seekp(0, std::ios::end);
+
+			std::size_t pHash = std::hash<std::string>{}(pIndexName);
+
+			pHandle.write((char*)&pHash, sizeof(pHash));
+			pHandle.write((char*)&pIndexFileID, sizeof(pIndexFileID));
+
+			pHandle.close();
+		}
+	}
+
+private:
+	FileHandle_t pReadStateFile;
+
+	void EnsureOpen()
+	{
+		if (pReadStateFile.is_open())
+			return;
+
+		pReadStateFile = FileSystem::OpenReadFile("logdata/state.dat");
+	}
+};
+
+static LogState g_pLogState;
+static Log* FindOrCreateLogIndex(const std::string& entryKey)
+{
+	std::string pKey = entryKey.substr(0, MAX_KEY_SIZE - 1); // Limit it to MAX_KEY_SIZE
+	std::size_t pKeyHash = std::hash<std::string>{}(pKey);
+	{
+		std::shared_lock<std::shared_mutex> readLock(g_LogIndexesMutex);
+		for (auto& pLog : g_pLogIndexes)
+		{
+			if (pLog.get()->pIndexHash == pKeyHash)
+				return pLog.get();
+		}
+
+		Log* pLog = g_pLogState.FindLog(pKey);
+		if (pLog)
+		{
+			g_pLogIndexes.push_back(std::unique_ptr<Log>(pLog));
+			return pLog;
+		}
+	}
+
+	std::unique_lock<std::shared_mutex> writeLock(g_LogIndexesMutex);
+
+	Log* pLog = new Log();
+	pLog->SetIndexName(pKey);
+	g_pLogIndexes.push_back(std::unique_ptr<Log>(pLog));
+	g_pLogState.AddEntryToList(pKey, pLog->pIndex.nFileName); // Save it into our state for disk based lookups
+
+	return pLog;
+}
 
 // The entryData is limited to around 32kb by the httpserver payload limit inside of HttpServer::Start
 bool LogSystem::AddEntry(const std::string& entryKey, const std::string& entryData)

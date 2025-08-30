@@ -144,7 +144,7 @@ void Util::GenerateUniqueFilename(UniqueFilenameId& id)
 	id.randomSuffix = dist(gen);
 }
 
-int Util::WriteUniqueFilenameIntoBuffer(UniqueFilenameId& nFileID, char* pBuffer, int nBufferSize)
+int Util::WriteUniqueFilenameIntoBuffer(const UniqueFilenameId& nFileID, char* pBuffer, int nBufferSize)
 {
 	return std::snprintf(pBuffer, nBufferSize, "%llx_%x_%04u",
 		static_cast<unsigned long long>(nFileID.timestamp),
