@@ -3,17 +3,8 @@
 #include "shared_mutex"
 #include "util.h"
 #include "algorithm"
-#include "bitset"
 
-// We never expect the nFileOffset to exceed 4gb since at best all logs together should be less than 1gb.
-struct LogEntry
-{
-	// Actually we don't even need to know the offset since every entry will be placed after each other.
-	// Though for fetching results were just gonna keep it for now.
-	// unsigned int nFileOffset = 0; // Offset inside the data file.
-	unsigned short nSize = 0; // Total size of this entry. At maximum every entry can be 64kb
-};
-
+typedef unsigned short EntrySize;
 
 // Simplified it by every Index having a single unique name instead of this.
 static constexpr int MAX_KEY_SIZE = 48;
@@ -26,8 +17,8 @@ struct LogKey
 };
 #endif
 
-static constexpr int MAX_ENTRIES = 512; // This can safely be increased without needing a version change since the nEntriesData is at the end of the LogIndex
-static constexpr int ENTRIES_DELETION_CYCLE = 128; // How many entries are deleted if we ever hit the limit.
+static constexpr int ENTRIES_TRIGGER_DELETION = 1 << 16; // This can safely be increased without needing a version change since the nEntriesData is at the end of the LogIndex
+static constexpr int ENTRIES_DELETION_CYCLE = 1 << 8; // How many entries are deleted if we ever hit the limit.
 // FileSystem::MAX_PATH is set to 256 since most OS filesystems only allow file names/paths up to that length.
 struct LogIndex // This should NEVER have stuff like std::string, we write this entire sturcture straight to disk!
 {
@@ -40,7 +31,6 @@ struct LogIndex // This should NEVER have stuff like std::string, we write this 
 	LogKey nKeysData[MAX_KEY_COUNT] = {0}; // Directly after nKeys the keys follow, each one is null terminated.
 #endif
 	unsigned int nEntries = 0;
-	LogEntry nEntriesData[MAX_ENTRIES] = {0}; // Directly after nEntries the entries follow.
 
 	FileHandle_t OpenIndexFile()
 	{
@@ -61,27 +51,14 @@ struct LogIndex // This should NEVER have stuff like std::string, we write this 
 	{
 		if (nEntryFileName[0] == '\0')
 		{
-			std::string pFileName = "logdata/data/";
-			pFileName.append(Util::GenerateUniqueFilename());
-			pFileName.append(".dat");
+			std::memcpy(nEntryFileName, "logdata/data/", 13);
+			int nWritten = Util::GenerateUniqueFilename(nEntryFileName + 13, sizeof(nEntryFileName) - 13);
+			std::memcpy(nEntryFileName + 13 + nWritten, ".dat", 4);
 
-			std::strncpy(nEntryFileName, pFileName.c_str(), sizeof(nEntryFileName) - 1);
 			nEntryFileName[sizeof(nEntryFileName) - 1] = '\0';
 		}
 
 		return FileSystem::OpenWriteFile(nEntryFileName);
-	}
-
-	// SLOW, returns the calculated total file size for the log data / combines all log entry sizes together.
-	int GetTotalEntrySize()
-	{
-		int nSize = 0;
-		for (int i=0; i<nEntries; ++i)
-		{
-			nSize += nEntriesData[i].nSize;
-		}
-
-		return nSize;
 	}
 
 	void SaveIndex()
@@ -143,16 +120,14 @@ public:
 		// We need to do a full lock since currently we do not support multiple threads writing to the same log entry.
 		std::lock_guard<std::mutex> lock(pMutex);
 
-		if (pIndex.nEntries >= MAX_ENTRIES) // Well... Now we got a problem.
+		if (pIndex.nEntries >= ENTRIES_TRIGGER_DELETION) // Well... Now we got a problem.
 		{
 			DoEntryDeletionCycle();
 		}
 
 		int nLogIndex = pIndex.nEntries; // Will always be 1 above the last since Array's start at 0... (I messed this up already once...)
-		if (nLogIndex >= MAX_ENTRIES)
-			nLogIndex = MAX_ENTRIES-1; // Should never happen but it threw me a warning anyways!
-
-		LogEntry& pEntry = pIndex.nEntriesData[nLogIndex];
+		if (nLogIndex >= ENTRIES_TRIGGER_DELETION)
+			nLogIndex = ENTRIES_TRIGGER_DELETION-1; // Should never happen but it threw me a warning anyways!
 	
 		FileHandle_t& pFile = OpenDataFile();
 		if (!pFile.is_open())
@@ -160,11 +135,13 @@ public:
 
 		pFile.seekp(nTotalSize); // We do this before we set the nSize since else it would also include the file were actively writing!
 
-		pEntry.nSize = std::min(USHRT_MAX, (int)pEntryData.length()); // Limit to USHRT_MAX
+		EntrySize nSize = std::min(USHRT_MAX, (int)pEntryData.length()); // Limit to USHRT_MAX
 		++pIndex.nEntries;
-		nTotalSize += pEntry.nSize;
+		nTotalSize += nSize;
+		nTotalSize += sizeof(nSize);
 
-		pFile.write(pEntryData.c_str(), pEntry.nSize);
+		pFile.write((char*)&nSize, sizeof(nSize));
+		pFile.write(pEntryData.c_str(), nSize);
 
 		pFile.flush();
 	}
@@ -178,15 +155,19 @@ private:
 		if (pIndex.nEntries <= ENTRIES_DELETION_CYCLE)
 			return; // Not enouth entries!
 
-		int nCurrentOffset = 0; // Total size of data that we will remove from the head of the file.
-		for (int i=0; i<ENTRIES_DELETION_CYCLE; ++i)
-		{
-			nCurrentOffset += pIndex.nEntriesData[i].nSize; // Skipping these.
-		}
-
 		FileHandle_t& pFile = OpenDataFile();
 		if (!pFile.is_open())
 			return; // Failed to open? Ok...
+
+		pFile.seekg(0);
+		int nCurrentOffset = 0; // Total size of data that we will remove from the head of the file.
+		for (int i=0; i<ENTRIES_DELETION_CYCLE; ++i)
+		{
+			EntrySize nSize;
+			pFile.read((char*)&nSize, sizeof(nSize));
+			nCurrentOffset += nSize; // Skipping these.
+			nCurrentOffset += sizeof(nSize);
+		}
 
 		std::unique_ptr<char[]> pBuffer(new char[USHRT_MAX]); // 64kb buffer to use while were swapping things around.
 		int i = ENTRIES_DELETION_CYCLE; // Skip these first as the lower their index the older they are.
@@ -194,20 +175,21 @@ private:
 		for (; i<pIndex.nEntries; ++i)
 		{
 			int nNewIndex = i - ENTRIES_DELETION_CYCLE;
-			LogEntry& pEntry = pIndex.nEntriesData[i];
 
 			pFile.seekg(nCurrentOffset);
-			pFile.read(pBuffer.get(), pEntry.nSize); // We don't need to check bounds since each entry has a size limit of USHRT_MAX
+
+			EntrySize nSize;
+			pFile.read((char*)&nSize, sizeof(nSize));
+			pFile.read(pBuffer.get(), nSize); // We don't need to check bounds since each entry has a size limit of USHRT_MAX
 
 			pFile.seekp(nNewOffset);
-			pFile.write(pBuffer.get(), pEntry.nSize);
-
-			pIndex.nEntriesData[nNewIndex] = pIndex.nEntriesData[i]; // Gonna move it here already :3
-			// pIndex.nEntriesData[nNewIndex].nFileOffset = nNewOffset;
+			pFile.write((char*)&nSize, sizeof(nSize));
+			pFile.write(pBuffer.get(), nSize);
 
 			// Now update our offsets
-			nCurrentOffset += pEntry.nSize;
-			nNewOffset += pEntry.nSize;
+			nSize += sizeof(nSize); // increment by this since we also write it into the file.
+			nCurrentOffset += nSize;
+			nNewOffset += nSize;
 		}
 
 		pIndex.nEntries -= ENTRIES_DELETION_CYCLE;

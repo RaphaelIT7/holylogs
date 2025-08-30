@@ -3,6 +3,21 @@
 #include <filesystem>
 #include <io.h>
 
+FileHandle_t FileSystem::OpenReadFile(const char* pFileName)
+{
+	return std::fstream(pFileName, std::ios::in | std::ios::binary);
+}
+
+FileHandle_t FileSystem::OpenWriteFile(const char* pFileName)
+{
+	return std::fstream(pFileName, std::ios::out | std::ios::binary);
+}
+
+FileHandle_t FileSystem::OpenFile(const char* pFileName)
+{
+	return std::fstream(pFileName, std::ios::in | std::ios::out | std::ios::binary);
+}
+
 FileHandle_t FileSystem::OpenReadFile(const std::string& pFileName)
 {
 	return std::fstream(pFileName, std::ios::in | std::ios::binary);

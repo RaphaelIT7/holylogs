@@ -99,3 +99,22 @@ std::string Util::GenerateUniqueFilename()
 
 	return oss.str();
 }
+
+int Util::GenerateUniqueFilename(char* pBuffer, int nBufferSize)
+{
+	auto now = std::chrono::system_clock::now();
+	auto duration = now.time_since_epoch();
+	auto micros = std::chrono::duration_cast<std::chrono::microseconds>(duration).count();
+
+	auto tid = std::hash<std::thread::id>{}(std::this_thread::get_id());
+
+	static thread_local std::mt19937 gen(std::random_device{}());
+	std::uniform_int_distribution<int> dist(0, 9999);
+	int random_suffix = dist(gen);
+
+	return std::snprintf(pBuffer, nBufferSize, "%llx_%zx_%04d", 
+		static_cast<unsigned long long>(micros), 
+		static_cast<size_t>(tid), 
+		random_suffix
+	);
+}
