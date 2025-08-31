@@ -81,7 +81,6 @@ public:
 
 	~Log()
 	{
-
 		FileHandle_t pFile = OpenIndexFile();
 		if (pFile.is_open())
 		{
@@ -91,6 +90,8 @@ public:
 
 		if (pEntryFile.is_open())
 			pEntryFile.close();
+
+		printf("Unloaded Log Index \"%s\" from memory\n", pIndex.nIndexName);
 	}
 
 	FileHandle_t OpenIndexFile()
@@ -161,6 +162,8 @@ public:
 
 		pFile.write((char*)&nSize, sizeof(nSize));
 		pFile.write(pEntryData.c_str(), nSize);
+
+		printf("Wrote a new Log Entry into \"%s\" (Size: %i)\n", pIndex.nIndexName, nSize);
 
 		pFile.flush();
 	}
@@ -490,6 +493,7 @@ static Log* FindOrCreateLogIndex(const std::string& entryKey, bool bCreate = tru
 		Log* pLog = g_pLogState.FindLog(pKey);
 		if (pLog)
 		{
+			printf("Loaded Log Index \"%s\" from state\n", pLog->pIndex.nIndexName);
 			g_pLogIndexes.push_back(std::unique_ptr<Log>(pLog));
 			return pLog;
 		}
@@ -504,6 +508,7 @@ static Log* FindOrCreateLogIndex(const std::string& entryKey, bool bCreate = tru
 	pLog->SetIndexName(pKey);
 	g_pLogIndexes.push_back(std::unique_ptr<Log>(pLog));
 	g_pLogState.AddEntryToList(pKey, pLog->pIndex.nFileName); // Save it into our state for disk based lookups
+	printf("Created a new Log Index \"%s\"\n", pKey.c_str());
 
 	return pLog;
 }

@@ -32,7 +32,7 @@ bool HttpServer::Start()
 	}
 
 	g_pHttpServer.set_payload_max_length(1024 * 32); // 32kb should be more than enouth for a single payload
-	g_pHttpServer.new_task_queue = [] { return new httplib::ThreadPool(2, 2); }; // Don't need many as we really don't expect much traffic
+	g_pHttpServer.new_task_queue = [] { return new httplib::ThreadPool(4, 4); }; // Don't need many as we really don't expect much traffic
 
 	printf("Starting HttpServer on \"%s:%i\"\n", strAdress.c_str(), nPort);
 	g_pHttpServer.listen(strAdress, nPort);
