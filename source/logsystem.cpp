@@ -10,7 +10,7 @@
 
 typedef unsigned short EntrySize;
 
-static constexpr double MAX_INDEX_LOADED_TIME = 10.0; // Time in seconds after which a index is unloaded. (based off the last time they were accessed)
+static constexpr double MAX_INDEX_LOADED_TIME = 30.0; // Time in seconds after which a index is unloaded. (based off the last time they were accessed)
 static constexpr long long INDEX_LOADED_CHECK_INTERVALS = 1000; // How often we check for indexes to unload (in ms)
 
 // Simplified it by every Index having a single unique name instead of this.
@@ -397,7 +397,10 @@ struct LogState
 		UniqueFilenameId pIndexID;
 		std::size_t pKeyHash = std::hash<std::string>{}(entryKey);
 		if (!GetIndex(pKeyHash, pIndexID))
+		{
+			printf("Failed to find Log index \"%s\" in state\n", entryKey.c_str());
 			return nullptr;
+		}
 
 		char nIndexFileName[FileSystem::MAX_PATH];
 		std::memcpy(nIndexFileName, pLogIndexesDir, pLogIndexesDirLength);
@@ -407,7 +410,10 @@ struct LogState
 
 		FileHandle_t pFile = FileSystem::OpenReadFile(nIndexFileName);
 		if (!pFile.is_open())
+		{
+			printf("Failed to open Log index \"%s\" from state\n", entryKey.c_str());
 			return nullptr;
+		}
 
 		Log* pLog = new Log();
 		pFile.read((char*)&pLog->pIndex, sizeof(LogIndex));
@@ -419,8 +425,7 @@ struct LogState
 
 	bool GetIndex(const std::size_t pKeyHash, UniqueFilenameId& pIndexID)
 	{
-		EnsureOpen();
-		if (!pReadStateFile.is_open())
+		if (!EnsureOpen())
 			return false;
 
 		pReadStateFile.seekg(0);
@@ -468,12 +473,13 @@ struct LogState
 private:
 	FileHandle_t pReadStateFile;
 
-	void EnsureOpen()
+	bool EnsureOpen()
 	{
 		if (pReadStateFile.is_open())
-			return;
+			return true;
 
 		pReadStateFile = FileSystem::OpenReadFile("logdata/state.dat");
+		return pReadStateFile.is_open();
 	}
 };
 
