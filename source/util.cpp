@@ -153,6 +153,24 @@ int Util::WriteUniqueFilenameIntoBuffer(const UniqueFilenameId& nFileID, char* p
 	);
 }
 
+bool Util::ReadUniqueFilenameFromBuffer(const char* pBuffer, UniqueFilenameId& nFileID)
+{
+	unsigned long long timestamp = 0;
+	unsigned int threadHash = 0;
+	unsigned int randomSuffix = 0;
+
+	int matched = std::sscanf(pBuffer, "%llx_%x_%04u", &timestamp, &threadHash, &randomSuffix);
+
+	if (matched != 3)
+		return false;
+
+	nFileID.timestamp = static_cast<uint64_t>(timestamp);
+	nFileID.threadHash = threadHash;
+	nFileID.randomSuffix = static_cast<uint16_t>(randomSuffix);
+
+	return true;
+}
+
 void Util::SetThreadName(std::thread& pThread, std::string strThreadName)
 {
 #ifdef _WIN32

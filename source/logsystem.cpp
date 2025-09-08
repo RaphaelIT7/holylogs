@@ -7,6 +7,7 @@
 #include "cstring"
 #include "climits"
 #include "mutex"
+#include <filesystem>
 
 typedef unsigned short EntrySize;
 
@@ -317,6 +318,12 @@ static void UnloadAnyNonTouchedIndexes()
 
 		for (Log* pLog : pLogsToDelete)
 			delete pLog;
+
+		{
+			std::unique_lock<std::shared_mutex> writeLock(g_LogIndexesMutex);
+			extern void CheckLogState();
+			CheckLogState();
+		}
 	}
 }
 
@@ -392,7 +399,12 @@ static void FillLogIndexKeys(LogIndex& pIndex, const std::unordered_map<std::str
 
 struct LogState
 {
-	Log* FindLog(const std::string entryKey)
+	LogState()
+	{
+		CheckState();
+	}
+
+	Log* FindLog(const std::string entryKey, bool bSecondCall = false)
 	{
 		UniqueFilenameId pIndexID;
 		std::size_t pKeyHash = std::hash<std::string>{}(entryKey);
@@ -411,8 +423,12 @@ struct LogState
 		FileHandle_t pFile = FileSystem::OpenReadFile(nIndexFileName);
 		if (!pFile.is_open())
 		{
-			printf("Failed to open Log index \"%s\" from state\n", entryKey.c_str());
-			return nullptr;
+			printf("Failed to open Log index \"%s\" from state!\n", entryKey.c_str());
+			if (bSecondCall)
+				return nullptr;
+
+			RebuildState();
+			return FindLog(entryKey, true); // Recursion... Yay
 		}
 
 		Log* pLog = new Log();
@@ -425,6 +441,7 @@ struct LogState
 
 	bool GetIndex(const std::size_t pKeyHash, UniqueFilenameId& pIndexID)
 	{
+		std::shared_lock<std::shared_mutex> readLock(pMutex);
 		if (!EnsureOpen())
 			return false;
 
@@ -453,11 +470,15 @@ struct LogState
 
 	void AddEntryToList(const std::string& pIndexName, const UniqueFilenameId& pIndexFileID)
 	{
+		// I bet Append is causing stuff to be corrupted, like this is the only file where we use append and its the only file where corruption happens
+		// ToDo: Fix it, though for now this should still work.
+		RebuildState();
+		/*std::unique_lock<std::shared_mutex> writeLock(pMutex);
 		if (pReadStateFile.is_open())
 			pReadStateFile.close();
 
 		FileHandle_t pHandle = FileSystem::OpenAppendFile("logdata/state.dat");
-		if (pHandle)
+		if (pHandle.is_open())
 		{
 			pHandle.seekp(0, std::ios::end);
 
@@ -467,11 +488,12 @@ struct LogState
 			pHandle.write((char*)&pIndexFileID, sizeof(pIndexFileID));
 
 			pHandle.close();
-		}
+		}*/
 	}
 
 private:
 	FileHandle_t pReadStateFile;
+	std::shared_mutex pMutex;
 
 	bool EnsureOpen()
 	{
@@ -481,9 +503,116 @@ private:
 		pReadStateFile = FileSystem::OpenReadFile("logdata/state.dat");
 		return pReadStateFile.is_open();
 	}
+
+	/*
+		In a current unknown race condition our state file can become corrupted.
+		If that happens, the hashes and filenameIDs won't match causing possible issues.
+	*/
+	void RebuildState()
+	{
+		std::unique_lock<std::shared_mutex> writeLock(pMutex);
+		printf("Rebuilding Log state...\n");
+
+		pReadStateFile.clear();
+		FileHandle_t pHandle = FileSystem::OpenWriteFile("logdata/state.dat");
+		if (!pHandle.is_open())
+		{
+			printf("Failed to rebuild log state! It's already open!\n");
+			return;
+		}
+
+		pHandle.seekp(0);
+		for(auto& pFile : std::filesystem::recursive_directory_iterator(pLogIndexesDir))
+		{
+			if (!pFile.is_regular_file())
+				continue;
+
+			FileHandle_t pIndexHandle = FileSystem::OpenReadFile(pFile.path().string());
+			if (!pIndexHandle.is_open())
+			{
+				printf("Failed to open index \"%s\"\n", pFile.path().string().c_str());
+				continue;
+			}
+
+			LogIndex pLogIndex;
+			pIndexHandle.read((char*)&pLogIndex, sizeof(LogIndex));
+
+			std::size_t pHash = std::hash<std::string>{}(pLogIndex.nIndexName);
+
+			std::string pFileName = pFile.path().string().substr(pLogIndexesDirLength);
+			pFileName.erase(pFileName.size() - pLogExtensionLength); // Nuke .dat
+
+			UniqueFilenameId pIndexFileID;
+			Util::ReadUniqueFilenameFromBuffer(pFileName.c_str(), pIndexFileID);
+
+			pHandle.write((char*)&pHash, sizeof(pHash));
+			pHandle.write((char*)&pIndexFileID, sizeof(UniqueFilenameId));
+		}
+		pHandle.close();
+	}
+
+public:
+	void CheckState()
+	{
+		if (!EnsureOpen())
+			return;
+
+		RebuildState();
+
+		/*printf("Checking Log state...\n");
+		bool bBroken = false;
+		int pIndexes = 0;
+		for(auto& pFile : std::filesystem::recursive_directory_iterator(pLogIndexesDir))
+			++pIndexes;
+
+		{
+			std::shared_lock<std::shared_mutex> readLock(pMutex);
+			pReadStateFile.seekg(0);
+			int nFoundIndexes = 0;
+			while (true)
+			{
+				std::size_t pHash;
+				pReadStateFile.read((char*)&pHash, sizeof(pHash));
+				if (pReadStateFile.gcount() != sizeof(pHash))
+					break;
+
+				UniqueFilenameId pIndexID;
+				pReadStateFile.read((char*)&pIndexID, sizeof(pIndexID));
+				// printf("Found hash %u\n", pHash);
+				char nIndexFileName[FileSystem::MAX_PATH];
+				std::memcpy(nIndexFileName, pLogIndexesDir, pLogIndexesDirLength);
+				int nWritten = Util::WriteUniqueFilenameIntoBuffer(pIndexID, nIndexFileName + pLogIndexesDirLength, sizeof(nIndexFileName) - pLogIndexesDirLength);
+				std::memcpy(nIndexFileName + pLogIndexesDirLength + nWritten, pLogExtension, pLogExtensionLength);
+				nIndexFileName[pLogIndexesDirLength + nWritten + pLogExtensionLength] = '\0';
+
+				FileHandle_t pFile = FileSystem::OpenReadFile(nIndexFileName);
+				if (!pFile.is_open())
+				{
+					printf("Failed to open Log index \"%u\" - %llu %u %u from state!\n", pHash, pIndexID.timestamp, pIndexID.threadHash, pIndexID.randomSuffix);
+					bBroken = true;
+					break;
+				}
+				pFile.close();
+				++nFoundIndexes;
+			}
+
+			if (!bBroken && pIndexes != nFoundIndexes)
+				bBroken = true;
+		}
+
+		if (bBroken)
+			RebuildState();
+		else
+			printf("Log state is fine :3\n");*/
+	}
 };
 
 static LogState g_pLogState;
+void CheckLogState()
+{
+	g_pLogState.CheckState();
+}
+
 static Log* FindOrCreateLogIndex(const std::string& entryKey, bool bCreate = true)
 {
 	std::string pKey = entryKey.substr(0, MAX_KEY_SIZE - 1); // Limit it to MAX_KEY_SIZE

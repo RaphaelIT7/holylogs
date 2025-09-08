@@ -31,5 +31,6 @@ namespace Util
 	extern int GenerateUniqueFilename(char* pBuffer, int nBufferSize);
 	extern void GenerateUniqueFilename(UniqueFilenameId& pFilename);
 	extern int WriteUniqueFilenameIntoBuffer(const UniqueFilenameId& nFileID, char* pBuffer, int nBufferSize);
+	extern bool ReadUniqueFilenameFromBuffer(const char* pBuffer, UniqueFilenameId& nFileID);
 	extern void SetThreadName(std::thread& pThread, std::string strThreadName);
 }
