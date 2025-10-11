@@ -459,11 +459,13 @@ struct LogState
 				if (pReadStateFile.gcount() != sizeof(pIndexID))
 					break;
 
+				pReadStateFile.close();
 				return true;
 			}
 
 			pReadStateFile.seekg(sizeof(UniqueFilenameId), std::ios::cur);
 		}
+		pReadStateFile.close();
 
 		return false;
 	}
@@ -513,7 +515,7 @@ private:
 		std::unique_lock<std::shared_mutex> writeLock(pMutex);
 		printf("Rebuilding Log state...\n");
 
-		pReadStateFile.clear();
+		pReadStateFile.close();
 		FileHandle_t pHandle = FileSystem::OpenWriteFile("logdata/state.dat");
 		if (!pHandle.is_open())
 		{
