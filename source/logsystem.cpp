@@ -14,17 +14,6 @@ typedef unsigned short EntrySize;
 static constexpr double MAX_INDEX_LOADED_TIME = 30.0; // Time in seconds after which a index is unloaded. (based off the last time they were accessed)
 static constexpr long long INDEX_LOADED_CHECK_INTERVALS = 1000; // How often we check for indexes to unload (in ms)
 
-// Simplified it by every Index having a single unique name instead of this.
-static constexpr int MAX_KEY_SIZE = 48;
-#ifdef LOGSYSTEM_MULTIPLE_KEYS
-static constexpr int MAX_KEY_COUNT = 16;
-struct LogKey
-{
-	char nKeyName[MAX_KEY_SIZE] = {0};
-	char nKeyValue[MAX_KEY_SIZE] = {0};
-};
-#endif
-
 // Strings for filesystem stuff
 static constexpr const char* pLogDataDir = "logdata/data/";
 static constexpr int pLogDataDirLength = 13;
@@ -36,22 +25,45 @@ static constexpr int pLogExtensionLength = 4;
 static constexpr int ENTRIES_TRIGGER_DELETION = 1 << 14; // This can safely be increased without needing a version change since the nEntriesData is at the end of the LogIndex
 static constexpr int ENTRIES_DELETION_CYCLE = 1 << 11; // How many entries are deleted if we ever hit the limit.
 // FileSystem::MAX_PATH is set to 256 since most OS filesystems only allow file names/paths up to that length.
-struct LogIndex // This should NEVER have stuff like std::string, we write this entire sturcture straight to disk!
+
+// Simplified it by every Index having a single unique name instead of this.
+static constexpr int MAX_KEY_SIZE = 48;
+static constexpr int MAX_KEY_COUNT = 16; // A soft limit - in theory we could have far more
+struct LogKey
+{
+	char nKeyName[MAX_KEY_SIZE] = {0};
+	char nKeyValue[MAX_KEY_SIZE] = {0};
+};
+
+// This should NEVER have stuff like std::string, we write this entire sturcture straight to disk!
+static constexpr int INDEX_VERSION_1 = 1;
+struct LogIndex_V1
+{
+	unsigned int version = 1; // In case we change any of the structs in the future.
+	UniqueFilenameId nFileName; // FileName of the index file containing this LogIndex data.
+	char nIndexName[48] = {0}; // Unique name of this index that is given to use to find it.
+	unsigned int nEntries = 0;
+	unsigned int nTotalSize = 0;
+};
+
+static constexpr int INDEX_VERSION_LATEST = 2;
+struct LogIndex_V2 // This should NEVER have stuff like std::string, we write this entire sturcture straight to disk!
+{
+	unsigned int version = 2; // In case we change any of the structs in the future.
+	UniqueFilenameId nFileName; // FileName of the index file containing this LogIndex data.
+	char nIndexName[48] = {0}; // Unique name of this index that is given to use to find it.
+	unsigned int nEntries = 0;
+	unsigned int nTotalSize = 0;
+
+	unsigned int nKeys = 0; // The total number of LogKey that refer to this log entry.
+};
+
+struct LogIndex : LogIndex_V2 // Implements all functions. Done like this simply to keep it more readable.
 {
 	LogIndex()
 	{
 		Util::GenerateUniqueFilename(nFileName);
 	}
-
-	unsigned int version = 1; // In case we change any of the structs in the future.
-	UniqueFilenameId nFileName; // FileName of the index file containing this LogIndex data.
-	char nIndexName[MAX_KEY_SIZE] = {0}; // Unique name of this index that is given to use to find it.
-#ifdef LOGSYSTEM_MULTIPLE_KEYS
-	unsigned int nKeys = 0; // The total number of keys that refer to this log entry.
-	LogKey nKeysData[MAX_KEY_COUNT] = {0}; // Directly after nKeys the keys follow, each one is null terminated.
-#endif
-	unsigned int nEntries = 0;
-	unsigned int nTotalSize = 0;
 
 	void SetIndexName(const std::string& pKeyName)
 	{
@@ -61,7 +73,37 @@ struct LogIndex // This should NEVER have stuff like std::string, we write this 
 		std::strncpy(nIndexName, pKeyName.c_str(), MAX_KEY_SIZE - 1);
 		nIndexName[MAX_KEY_SIZE - 1] = '\0';
 	}
+
+	LogIndex& operator=(const LogIndex_V1& other)
+	{
+		memcpy(this, &other, sizeof(LogIndex_V1));
+		nKeys = 0;
+	}
 };
+
+static inline bool LoadLogIndex(LogIndex& pIndex, FileHandle_t& pHandle)
+{
+	unsigned int indexVersion = -1;
+	pHandle.read((char*)&indexVersion, sizeof(indexVersion));
+	pHandle.seekg(-sizeof(indexVersion), std::ios_base::cur);
+
+	if (indexVersion == INDEX_VERSION_1)
+	{
+		LogIndex_V1 pIndexV1;
+		pHandle.read((char*)&pIndexV1, sizeof(LogIndex_V1));
+
+		pIndex = pIndexV1;
+		return true;
+	}
+
+	if (indexVersion == INDEX_VERSION_LATEST)
+	{
+		pHandle.read((char*)&pIndex, sizeof(LogIndex));
+		return true;
+	}
+
+	return false;
+}
 
 struct Log // This stuct will be in memory, and only the LogIndex is written to disk.
 {
@@ -537,9 +579,11 @@ private:
 			}
 
 			LogIndex pLogIndex;
-			pIndexHandle.read((char*)&pLogIndex, sizeof(LogIndex));
-
-			std::size_t pHash = std::hash<std::string>{}(pLogIndex.nIndexName);
+			if (!LoadLogIndex(pLogIndex, pIndexHandle))
+			{
+				printf("Failed to read index \"%s\"\n", pFile.path().string().c_str());
+				continue;
+			}
 
 			std::string pFileName = pFile.path().string().substr(pLogIndexesDirLength);
 			pFileName.erase(pFileName.size() - pLogExtensionLength); // Nuke .dat
@@ -547,8 +591,12 @@ private:
 			UniqueFilenameId pIndexFileID;
 			Util::ReadUniqueFilenameFromBuffer(pFileName.c_str(), pIndexFileID);
 
-			pHandle.write((char*)&pHash, sizeof(pHash));
-			pHandle.write((char*)&pIndexFileID, sizeof(UniqueFilenameId));
+			for (size_t idx = 0; idx < pLogIndex.nKeys; ++idx)
+			{
+				std::size_t pHash = std::hash<std::string>{}(pLogIndex.nKeysData[idx].nKeyValue);
+				pHandle.write((char*)&pHash, sizeof(pHash));
+				pHandle.write((char*)&pIndexFileID, sizeof(UniqueFilenameId));
+			}
 		}
 		pHandle.close();
 	}
